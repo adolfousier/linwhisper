@@ -1,6 +1,6 @@
 [package]
 name = "linwhisper"
-version = "0.1.13"
+version = "0.1.14"
 edition = "2024"
 authors = ["Adolfo Usier"]
 license = "MIT"
@@ -21,3 +21,4 @@ chrono = "0.4"
 dirs = "6"
 whisper-rs = "0.15"
 rubato = "0.14"
+rodio = { version = "0.19", default-features = false, features = ["wav"] }

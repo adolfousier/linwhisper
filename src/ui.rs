@@ -10,30 +10,42 @@ use crate::config::{Config, TranscriptionService};
 use crate::db::Db;
 use crate::local_stt::LocalWhisper;
 
-// Symbolic icon names (SVG-based, always centered)
-const ICON_IDLE: &str = "audio-input-microphone-symbolic";
-const ICON_REC: &str = "media-playback-stop-symbolic";
-const ICON_DONE: &str = "object-select-symbolic";
-const TEXT_WAIT: &str = "\u{2026}"; // …
+const ICON_MIC: &str = "audio-input-microphone-symbolic";
+const NOTIFICATION_SOUND: &[u8] = include_bytes!("audio/notification.wav");
+
+fn play_notification() {
+    std::thread::spawn(|| {
+        use rodio::{Decoder, OutputStream, Sink};
+        use std::io::Cursor;
+        if let Ok((_stream, handle)) = OutputStream::try_default() {
+            if let Ok(sink) = Sink::try_new(&handle) {
+                if let Ok(source) = Decoder::new(Cursor::new(NOTIFICATION_SOUND)) {
+                    sink.append(source);
+                    sink.sleep_until_end();
+                }
+            }
+        }
+    });
+}
 
 const CSS: &str = r#"
     window {
         background-color: transparent;
     }
     .mic-btn {
-        min-width: 96px;
-        min-height: 64px;
-        border-radius: 14px;
+        min-width: 72px;
+        min-height: 72px;
+        border-radius: 9999px;
         background-image: none;
         background-color: #dc2626;
         color: white;
-        font-size: 36px;
+        font-size: 32px;
         font-weight: 600;
         border: none;
         box-shadow: none;
         outline: none;
         -gtk-icon-shadow: none;
-        -gtk-icon-size: 36px;
+        -gtk-icon-size: 32px;
         padding: 0;
     }
     .mic-btn:hover {
@@ -80,7 +92,7 @@ const CSS: &str = r#"
     }
 "#;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum State {
     Idle,
     Recording,
@@ -100,8 +112,8 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     let window = gtk4::ApplicationWindow::builder()
         .application(app)
         .title("LinWhisper")
-        .default_width(112)
-        .default_height(96)
+        .default_width(88)
+        .default_height(100)
         .decorated(false)
         .resizable(false)
         .build();
@@ -112,15 +124,18 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     vbox.set_valign(gtk4::Align::Center);
 
     // The mic button (no keyboard activation to prevent accidental recordings)
+    let icon = gtk4::Image::from_icon_name(ICON_MIC);
+    icon.set_pixel_size(32);
     let button = gtk4::Button::new();
-    button.set_icon_name(ICON_IDLE);
+    button.set_child(Some(&icon));
     button.add_css_class("mic-btn");
-    button.set_size_request(96, 64);
+    button.set_size_request(72, 72);
+    button.set_halign(gtk4::Align::Center);
     button.set_focusable(false);
 
-    let status = gtk4::Label::new(None);
+    let status = gtk4::Label::new(Some(" "));
     status.add_css_class("status-label");
-    status.set_visible(false);
+    status.set_opacity(0.0);
 
     vbox.append(&button);
     vbox.append(&status);
@@ -151,7 +166,6 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     // Shared state
     let state = Rc::new(RefCell::new(State::Idle));
     let recorder = Rc::new(RefCell::new(Recorder::new().expect("Failed to init audio")));
-    let pending_paste = Rc::new(RefCell::new(false));
 
     // --- Left-click handler (on the Button) ---
     let btn = button.clone();
@@ -160,7 +174,6 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     let rec_c = Rc::clone(&recorder);
     let config_c = Arc::clone(&config);
     let db_c = Arc::clone(&db);
-    let pp = Rc::clone(&pending_paste);
     let lw_c = local_whisper.clone();
 
     button.connect_clicked(move |_| {
@@ -170,21 +183,21 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
                 if let Err(e) = rec_c.borrow_mut().start() {
                     eprintln!("Record start error: {e}");
                     st.set_label(&format!("Err: {e}"));
-                    st.set_visible(true);
+                    st.set_opacity(1.0);
                     return;
                 }
                 *state_c.borrow_mut() = State::Recording;
                 btn.add_css_class("recording");
                 btn.remove_css_class("done");
-                btn.set_icon_name(ICON_REC);
+
                 st.set_label("Recording...");
-                st.set_visible(true);
+                st.set_opacity(1.0);
             }
             State::Recording => {
                 *state_c.borrow_mut() = State::Processing;
                 btn.remove_css_class("recording");
                 btn.add_css_class("processing");
-                btn.set_label(TEXT_WAIT);
+
                 st.set_label("Transcribing...");
 
                 let wav = match rec_c.borrow_mut().stop() {
@@ -194,7 +207,6 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
                         st.set_label(&format!("Err: {e}"));
                         *state_c.borrow_mut() = State::Idle;
                         btn.remove_css_class("processing");
-                        btn.set_icon_name(ICON_IDLE);
                         return;
                     }
                 };
@@ -229,7 +241,7 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
                 let btn2 = btn.clone();
                 let st2 = st.clone();
                 let state_c2 = Rc::clone(&state_c);
-                let pp2 = Rc::clone(&pp);
+                let notify = config_c.sound_notification;
                 glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
                     match rx.try_recv() {
                         Ok(Ok(text)) => {
@@ -240,18 +252,34 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
                             }
                             match crate::input::copy_to_clipboard(&text) {
                                 Ok(_) => {
-                                    eprintln!("Clipboard ready, waiting for focus change...");
-                                    *pp2.borrow_mut() = true;
+                                    if notify {
+                                        play_notification();
+                                    }
                                     btn2.remove_css_class("processing");
                                     btn2.add_css_class("done");
-                                    btn2.set_icon_name(ICON_DONE);
-                                    st2.set_label("Click target \u{2192}");
+
+                                    st2.set_label("Copied!");
+                                    let st3 = st2.clone();
+                                    let btn3 = btn2.clone();
+                                    glib::timeout_add_local_once(
+                                        std::time::Duration::from_secs(2),
+                                        move || {
+                                            st3.set_opacity(0.0);
+                                            btn3.remove_css_class("done");
+
+                                        },
+                                    );
                                 }
                                 Err(e) => {
                                     eprintln!("Clipboard error: {e}");
                                     btn2.remove_css_class("processing");
-                                    btn2.set_icon_name(ICON_IDLE);
+
                                     st2.set_label("Error!");
+                                    let st3 = st2.clone();
+                                    glib::timeout_add_local_once(
+                                        std::time::Duration::from_secs(3),
+                                        move || st3.set_opacity(0.0),
+                                    );
                                 }
                             }
                             *state_c2.borrow_mut() = State::Idle;
@@ -260,12 +288,11 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
                         Ok(Err(e)) => {
                             eprintln!("Transcription error: {e}");
                             btn2.remove_css_class("processing");
-                            btn2.set_icon_name(ICON_IDLE);
                             st2.set_label("Error!");
                             let st3 = st2.clone();
                             glib::timeout_add_local_once(
                                 std::time::Duration::from_secs(3),
-                                move || st3.set_visible(false),
+                                move || st3.set_opacity(0.0),
                             );
                             *state_c2.borrow_mut() = State::Idle;
                             glib::ControlFlow::Break
@@ -274,39 +301,12 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
                         Err(_) => {
                             *state_c2.borrow_mut() = State::Idle;
                             btn2.remove_css_class("processing");
-                            btn2.set_icon_name(ICON_IDLE);
                             glib::ControlFlow::Break
                         }
                     }
                 });
             }
             State::Processing => {}
-        }
-    });
-
-    // --- Focus loss: paste into target window ---
-    let pp_focus = Rc::clone(&pending_paste);
-    let st_focus = status.clone();
-    let btn_focus = button.clone();
-    window.connect_is_active_notify(move |_win| {
-        if !_win.is_active() && *pp_focus.borrow() {
-            *pp_focus.borrow_mut() = false;
-            eprintln!("Focus lost — pasting...");
-            let st_f = st_focus.clone();
-            let btn_f = btn_focus.clone();
-            glib::timeout_add_local_once(std::time::Duration::from_millis(200), move || {
-                if let Err(e) = crate::input::simulate_paste() {
-                    eprintln!("Paste error: {e}");
-                }
-                st_f.set_label("Pasted!");
-                let st_f2 = st_f.clone();
-                let btn_f2 = btn_f.clone();
-                glib::timeout_add_local_once(std::time::Duration::from_secs(2), move || {
-                    st_f2.set_visible(false);
-                    btn_f2.remove_css_class("done");
-                    btn_f2.set_icon_name(ICON_IDLE);
-                });
-            });
         }
     });
 
@@ -354,7 +354,7 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
         glib::Propagation::Proceed
     });
 
-    // --- Position: saved or bottom-right, always-on-top ---
+    // --- Position: saved or bottom-right ---
     let db_pos = Arc::clone(&db);
     window.connect_realize(move |win| {
         if let Some(surface) = win.surface() {
@@ -369,10 +369,65 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
         });
     });
 
+    // --- Esc key: stop recording ---
+    let esc_btn = button.clone();
+    let esc_state = Rc::clone(&state);
+    let esc_shortcut = gtk4::Shortcut::new(
+        gtk4::ShortcutTrigger::parse_string("Escape"),
+        Some(gtk4::CallbackAction::new(move |_, _| {
+            if *esc_state.borrow() == State::Recording {
+                esc_btn.emit_clicked();
+            }
+            glib::Propagation::Stop
+        })),
+    );
+    let esc_controller = gtk4::ShortcutController::new();
+    esc_controller.set_scope(gtk4::ShortcutScope::Global);
+    esc_controller.add_shortcut(esc_shortcut);
+    window.add_controller(esc_controller);
+
+    // --- D-Bus action: "record" — triggered by GNOME shortcut ---
+    let record_action = gtk4::gio::SimpleAction::new("record", None);
+    let btn_rec = button.clone();
+    let state_rec = Rc::clone(&state);
+    let win_rec = window.clone();
+    record_action.connect_activate(move |_, _| {
+        eprintln!("[dbus] 'record' action activated");
+        win_rec.present();
+        // GNOME Wayland: force-activate via Shell D-Bus (falls back silently on other DEs)
+        let _ = std::process::Command::new("gdbus")
+            .args([
+                "call", "--session",
+                "--dest=org.gnome.Shell",
+                "--object-path=/org/gnome/Shell",
+                "--method=org.gnome.Shell.Eval",
+                r#"global.get_window_actors().find(a=>a.meta_window.title==='LinWhisper')?.meta_window.activate(0)"#,
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        if *state_rec.borrow() == State::Idle {
+            btn_rec.emit_clicked();
+        }
+    });
+    app.add_action(&record_action);
+
+    // --- D-Bus action: "stop" — triggered by GNOME shortcut ---
+    let stop_action = gtk4::gio::SimpleAction::new("stop", None);
+    let btn_stop = button.clone();
+    let state_stop = Rc::clone(&state);
+    stop_action.connect_activate(move |_, _| {
+        eprintln!("[dbus] 'stop' action activated");
+        if *state_stop.borrow() == State::Recording {
+            btn_stop.emit_clicked();
+        }
+    });
+    app.add_action(&stop_action);
+
     window.present();
 }
 
-/// Query current window position via xdotool and save to DB.
+
 fn save_window_position(win: &gtk4::ApplicationWindow, db: &Arc<Mutex<Db>>) {
     let title = win.title().map(|t| t.to_string()).unwrap_or_default();
     if let Ok(output) = std::process::Command::new("xdotool")
@@ -430,19 +485,6 @@ fn position_window(_window: &gtk4::ApplicationWindow, db: &Arc<Mutex<Db>>) {
             "search", "--name", title,
             "windowmove", &x.to_string(), &y.to_string(),
         ])
-        .status();
-
-    let _ = std::process::Command::new("xdotool")
-        .args(["search", "--name", title, "windowactivate", "--sync"])
-        .status();
-    set_always_on_top(true);
-}
-
-fn set_always_on_top(on: bool) {
-    let title = "LinWhisper";
-    let action = if on { "add,above" } else { "remove,above" };
-    let _ = std::process::Command::new("wmctrl")
-        .args(["-r", title, "-b", action])
         .status();
 }
 

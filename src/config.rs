@@ -13,6 +13,7 @@ pub struct Config {
     pub api_model: String,
     pub db_path: PathBuf,
     pub whisper_model_path: PathBuf,
+    pub sound_notification: bool,
 }
 
 impl Config {
@@ -72,6 +73,10 @@ impl Config {
             std::process::exit(1);
         }
 
+        let sound_notification = std::env::var("SOUND_NOTIFICATION_ON_COMPLETION")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false);
+
         Self {
             transcription_service,
             api_base_url,
@@ -79,6 +84,7 @@ impl Config {
             api_model,
             db_path,
             whisper_model_path,
+            sound_notification,
         }
     }
 }

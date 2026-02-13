@@ -1268,7 +1268,7 @@ checksum = "df1d3c3b53da64cf5760482273a98e575c651a67eec7f77df96b5b642de8f039"
 
 [[package]]
 name = "linwhisper"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "chrono",
  "cpal",
@@ -1277,6 +1277,7 @@ dependencies = [
  "gtk4",
  "hound",
  "reqwest",
+ "rodio",
  "rubato",
  "rusqlite",
  "serde",
@@ -1761,6 +1762,17 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rodio"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6006a627c1a38d37f3d3a85c6575418cfe34a5392d60a686d0071e1c8d427acb"
+dependencies = [
+ "cpal",
+ "hound",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

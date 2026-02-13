@@ -1,6 +1,6 @@
 # LinWhisper
 
-Floating voice-to-text tool for Linux. Click to record, click to transcribe and paste. Supports fully local transcription via whisper.cpp or any OpenAI-compatible API endpoint (Groq, Ollama, OpenRouter, LM Studio, LocalAI, etc.).
+Floating voice-to-text tool for Linux. Click to record, click to transcribe, text copied to clipboard. Supports fully local transcription via whisper.cpp or any OpenAI-compatible API endpoint (Groq, Ollama, OpenRouter, LM Studio, LocalAI, etc.).
 
 ![LinWhisper button states](src/screenshots/ui-buttons.png)
 
@@ -12,11 +12,12 @@ With **local mode** (`PRIMARY_TRANSCRIPTION_SERVICE=local`), everything stays on
 
 ## Features
 
-- Always-on-top floating microphone button (draggable, position persists)
-- One-click voice recording with visual feedback (red idle, green recording)
+- Floating microphone button (draggable, position persists)
+- One-click voice recording with visual feedback (red idle, green recording, orange transcribing)
+- Global keyboard shortcuts via D-Bus (works on GNOME, KDE, Sway, etc.)
 - Local transcription via whisper.cpp (no internet required)
 - API transcription via any OpenAI-compatible endpoint (Groq, Ollama, OpenRouter, LM Studio, LocalAI)
-- Auto-pastes transcribed text into focused input field
+- Transcribed text copied to clipboard automatically
 - SQLite history with right-click access
 - No background mic access - recording only on explicit click
 - Audio stays in-memory, never saved to disk
@@ -27,12 +28,12 @@ With **local mode** (`PRIMARY_TRANSCRIPTION_SERVICE=local`), everything stays on
 
 **Debian/Ubuntu:**
 ```bash
-sudo apt install libgtk-4-dev libgraphene-1.0-dev libvulkan-dev libasound2-dev xclip xdotool wmctrl cmake libclang-dev
+sudo apt install libgtk-4-dev libgraphene-1.0-dev libvulkan-dev libasound2-dev xclip cmake libclang-dev
 ```
 
 **Arch Linux:**
 ```bash
-sudo pacman -S gtk4 graphene vulkan-icd-loader alsa-lib xclip xdotool wmctrl cmake clang
+sudo pacman -S gtk4 graphene vulkan-icd-loader alsa-lib xclip cmake clang
 ```
 
 ### Build tools
@@ -41,9 +42,8 @@ sudo pacman -S gtk4 graphene vulkan-icd-loader alsa-lib xclip xdotool wmctrl cma
 
 ### Runtime requirements
 
-- **X11 session required** - LinWhisper relies on `xdotool`, `xclip`, and `wmctrl` for window positioning, clipboard, and paste simulation. These are X11-only tools and **do not work on native Wayland**. If your distro runs Wayland by default (GNOME 41+, Fedora, etc.), you can either:
-  - Log in to an X11/Xorg session from your display manager
-  - Run under XWayland (may partially work, but not guaranteed)
+- Works on both **Wayland** and **X11**
+- `xclip` for clipboard access
 - Working microphone
 
 ## Setup
@@ -101,12 +101,63 @@ Models are downloaded from [HuggingFace (ggerganov/whisper.cpp)](https://hugging
 
 | Action | What happens |
 |---|---|
-| **Left-click** | Start recording (button turns green with pulse, shows stop icon) |
-| **Left-click again** | Stop recording, transcribe, auto-paste into focused input |
+| **Left-click** | Start recording (button turns green with pulse) |
+| **Left-click again** | Stop recording, transcribe, copy to clipboard |
+| **Esc** (when focused) | Stop recording |
 | **Right-click** | Popover menu with History and Quit |
-| **Drag** | Move the button anywhere on screen - position saved across sessions |
+| **Drag** | Move the button anywhere on screen |
 
-> **Note:** Auto-paste uses `xclip` and `xdotool` to simulate Ctrl+V. If text doesn't paste automatically, it will still be copied to your clipboard - just paste manually with Ctrl+V.
+After transcription completes, the text is copied to your clipboard. Paste with **Ctrl+V** wherever you need it.
+
+### Sound notification
+
+Play an audio cue when transcription completes:
+
+```env
+SOUND_NOTIFICATION_ON_COMPLETION=true
+```
+
+This is especially useful with local models that may take a few seconds to transcribe. You can keep working in another window, hear the notification when it's done, and just Ctrl+V to paste.
+
+## Keyboard Shortcuts
+
+LinWhisper exposes D-Bus actions that you can bind to global keyboard shortcuts in your desktop environment. This works on **GNOME, KDE, Sway, Hyprland, i3**, and any DE that supports custom shortcuts.
+
+**Start recording** (raises window and begins recording):
+```
+gdbus call --session --dest=dev.linwhisper.app --object-path=/dev/linwhisper/app --method=org.gtk.Actions.Activate record [] {}
+```
+
+**Stop recording** (stops recording and triggers transcription):
+```
+gdbus call --session --dest=dev.linwhisper.app --object-path=/dev/linwhisper/app --method=org.gtk.Actions.Activate stop [] {}
+```
+
+### GNOME
+
+Settings > Keyboard > Custom Shortcuts:
+
+| Name | Command | Suggested shortcut |
+|------|---------|-------------------|
+| LinWhisper Record | `gdbus call --session --dest=dev.linwhisper.app --object-path=/dev/linwhisper/app --method=org.gtk.Actions.Activate record [] {}` | Alt+Shift+R |
+| LinWhisper Stop | `gdbus call --session --dest=dev.linwhisper.app --object-path=/dev/linwhisper/app --method=org.gtk.Actions.Activate stop [] {}` | Alt+Shift+S |
+
+### KDE Plasma
+
+System Settings > Shortcuts > Custom Shortcuts > Edit > New > Global Shortcut > Command/URL. Add the same `gdbus` commands above.
+
+### Sway / Hyprland / i3
+
+Add to your config:
+```
+# Sway / i3
+bindsym Alt+Shift+r exec gdbus call --session --dest=dev.linwhisper.app --object-path=/dev/linwhisper/app --method=org.gtk.Actions.Activate record [] {}
+bindsym Alt+Shift+s exec gdbus call --session --dest=dev.linwhisper.app --object-path=/dev/linwhisper/app --method=org.gtk.Actions.Activate stop [] {}
+
+# Hyprland
+bind = ALT SHIFT, R, exec, gdbus call --session --dest=dev.linwhisper.app --object-path=/dev/linwhisper/app --method=org.gtk.Actions.Activate record [] {}
+bind = ALT SHIFT, S, exec, gdbus call --session --dest=dev.linwhisper.app --object-path=/dev/linwhisper/app --method=org.gtk.Actions.Activate stop [] {}
+```
 
 ## Compatible API Backends
 
@@ -151,7 +202,7 @@ API_MODEL=whisper-1
 | Local STT | whisper-rs (whisper.cpp) + rubato |
 | API STT | reqwest + OpenAI-compatible API |
 | Database | rusqlite (bundled SQLite) |
-| Paste | xclip + xdotool |
+| Clipboard | xclip |
 | Config | dotenvy |
 
 ## License
