@@ -1,6 +1,6 @@
 # LinWhisper
 
-Floating voice-to-text tool for Linux. Click to record, click to transcribe and paste. Supports fully local transcription via whisper.cpp or cloud via Groq API.
+Floating voice-to-text tool for Linux. Click to record, click to transcribe and paste. Supports fully local transcription via whisper.cpp or any OpenAI-compatible API endpoint (Groq, Ollama, OpenRouter, LM Studio, LocalAI, etc.).
 
 ![LinWhisper button states](src/screenshots/ui-buttons.png)
 
@@ -8,14 +8,14 @@ Floating voice-to-text tool for Linux. Click to record, click to transcribe and 
 
 LinWhisper has no account, no telemetry, and no background processes. Your microphone is **never accessed** until you explicitly click the record button. Audio is captured in-memory, never written to disk. Only the transcribed text is stored locally in SQLite on your machine.
 
-With **local mode** (`PRIMARY_TRANSCRIPTION_SERVICE=local`), everything stays on your machine - no network requests at all. With **Groq mode**, audio is sent to the Groq API and immediately discarded ([Groq's privacy policy](https://groq.com/privacy-policy/)).
+With **local mode** (`PRIMARY_TRANSCRIPTION_SERVICE=local`), everything stays on your machine - no network requests at all. With **API mode** (`PRIMARY_TRANSCRIPTION_SERVICE=api`), audio is sent to your configured endpoint (Groq by default, but can point to a local Ollama/LM Studio instance too).
 
 ## Features
 
 - Always-on-top floating microphone button (draggable, position persists)
 - One-click voice recording with visual feedback (red idle, green recording)
 - Local transcription via whisper.cpp (no internet required)
-- Cloud transcription via Groq API (whisper-large-v3-turbo)
+- API transcription via any OpenAI-compatible endpoint (Groq, Ollama, OpenRouter, LM Studio, LocalAI)
 - Auto-pastes transcribed text into focused input field
 - SQLite history with right-click access
 - No background mic access - recording only on explicit click
@@ -66,9 +66,9 @@ sudo pacman -S gtk4 graphene vulkan-icd-loader alsa-lib xclip xdotool wmctrl cma
    just run-local ggml-small.en.bin
    ```
 
-   **Groq API mode** (requires `GROQ_API_KEY` in `.env`):
+   **API mode** (requires `API_KEY` in `.env`):
    ```bash
-   just run-groq
+   just run-api
    ```
 
    **Without just** (manual setup):
@@ -79,7 +79,7 @@ sudo pacman -S gtk4 graphene vulkan-icd-loader alsa-lib xclip xdotool wmctrl cma
      https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
 
    # Set backend in .env
-   # PRIMARY_TRANSCRIPTION_SERVICE=local  (or groq)
+   # PRIMARY_TRANSCRIPTION_SERVICE=local  (or api)
 
    cargo build --release
    cargo run --release
@@ -108,6 +108,40 @@ Models are downloaded from [HuggingFace (ggerganov/whisper.cpp)](https://hugging
 
 > **Note:** Auto-paste uses `xclip` and `xdotool` to simulate Ctrl+V. If text doesn't paste automatically, it will still be copied to your clipboard - just paste manually with Ctrl+V.
 
+## Compatible API Backends
+
+Any service exposing an OpenAI-compatible `/v1/audio/transcriptions` endpoint works. Set `API_BASE_URL`, `API_KEY`, and `API_MODEL` in your `.env`:
+
+**Groq (default, no config needed):**
+```env
+PRIMARY_TRANSCRIPTION_SERVICE=api
+API_KEY=gsk_...
+```
+
+**Ollama (local, no API key needed):**
+```env
+PRIMARY_TRANSCRIPTION_SERVICE=api
+API_BASE_URL=http://localhost:11434/v1
+API_KEY=unused
+API_MODEL=whisper
+```
+
+**OpenRouter:**
+```env
+PRIMARY_TRANSCRIPTION_SERVICE=api
+API_BASE_URL=https://openrouter.ai/api/v1
+API_KEY=sk-or-...
+API_MODEL=openai/whisper-1
+```
+
+**LM Studio:**
+```env
+PRIMARY_TRANSCRIPTION_SERVICE=api
+API_BASE_URL=http://localhost:1234/v1
+API_KEY=unused
+API_MODEL=whisper-1
+```
+
 ## Stack
 
 | Component | Crate/Tool |
@@ -115,7 +149,7 @@ Models are downloaded from [HuggingFace (ggerganov/whisper.cpp)](https://hugging
 | GUI | gtk4-rs (GTK 4) |
 | Audio | cpal + hound |
 | Local STT | whisper-rs (whisper.cpp) + rubato |
-| Cloud STT | reqwest + Groq API |
+| API STT | reqwest + OpenAI-compatible API |
 | Database | rusqlite (bundled SQLite) |
 | Paste | xclip + xdotool |
 | Config | dotenvy |

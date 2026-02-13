@@ -21,9 +21,9 @@ run-local model=default_model:
     fi
     PRIMARY_TRANSCRIPTION_SERVICE=local WHISPER_MODEL={{model}} cargo run --release
 
-# Run in Groq cloud mode
-run-groq:
-    PRIMARY_TRANSCRIPTION_SERVICE=groq cargo run --release
+# Run in API mode (default: Groq)
+run-api:
+    PRIMARY_TRANSCRIPTION_SERVICE=api cargo run --release
 
 # Download a whisper model (without running)
 download-model model=default_model:

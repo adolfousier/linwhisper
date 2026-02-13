@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.13
+
+- Custom OpenAI-compatible API base URL via `API_BASE_URL` env var
+- Works with any OpenAI-compatible backend: Groq (default), Ollama, OpenRouter, LM Studio, LocalAI, etc.
+- Renamed env vars: `API_KEY`, `API_MODEL`, `API_BASE_URL` (old `GROQ_API_KEY`/`GROQ_STT_MODEL` still work as fallback)
+- `TranscriptionService::Groq` renamed to `Api`
+- `PRIMARY_TRANSCRIPTION_SERVICE` now accepts `api` (and `groq` as legacy alias)
+
 ## v0.1.12
 
 - Added fully local transcription via whisper.cpp (whisper-rs + rubato)

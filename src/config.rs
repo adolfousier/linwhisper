@@ -2,14 +2,15 @@ use std::path::PathBuf;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum TranscriptionService {
-    Groq,
+    Api,
     Local,
 }
 
 pub struct Config {
     pub transcription_service: TranscriptionService,
-    pub groq_api_key: Option<String>,
-    pub groq_model: String,
+    pub api_base_url: String,
+    pub api_key: Option<String>,
+    pub api_model: String,
     pub db_path: PathBuf,
     pub whisper_model_path: PathBuf,
 }
@@ -20,22 +21,32 @@ impl Config {
         let _ = dotenvy::dotenv();
 
         let transcription_service = match std::env::var("PRIMARY_TRANSCRIPTION_SERVICE")
-            .unwrap_or_else(|_| "groq".into())
+            .unwrap_or_else(|_| "api".into())
             .to_lowercase()
             .as_str()
         {
             "local" => TranscriptionService::Local,
-            _ => TranscriptionService::Groq,
+            // Accept "api" and legacy "groq"
+            _ => TranscriptionService::Api,
         };
 
-        let groq_api_key = std::env::var("GROQ_API_KEY").ok();
+        // API_BASE_URL with default pointing to Groq (backwards compatible)
+        let api_base_url = std::env::var("API_BASE_URL")
+            .unwrap_or_else(|_| "https://api.groq.com/openai/v1".into());
 
-        if transcription_service == TranscriptionService::Groq && groq_api_key.is_none() {
-            panic!("GROQ_API_KEY must be set when PRIMARY_TRANSCRIPTION_SERVICE=groq");
+        // API_KEY with GROQ_API_KEY as legacy fallback
+        let api_key = std::env::var("API_KEY")
+            .or_else(|_| std::env::var("GROQ_API_KEY"))
+            .ok();
+
+        if transcription_service == TranscriptionService::Api && api_key.is_none() {
+            panic!("API_KEY must be set when PRIMARY_TRANSCRIPTION_SERVICE=api (legacy: GROQ_API_KEY also accepted)");
         }
 
-        let groq_model =
-            std::env::var("GROQ_STT_MODEL").unwrap_or_else(|_| "whisper-large-v3-turbo".into());
+        // API_MODEL with GROQ_STT_MODEL as legacy fallback
+        let api_model = std::env::var("API_MODEL")
+            .or_else(|_| std::env::var("GROQ_STT_MODEL"))
+            .unwrap_or_else(|_| "whisper-large-v3-turbo".into());
 
         let data_dir = dirs::data_local_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -63,8 +74,9 @@ impl Config {
 
         Self {
             transcription_service,
-            groq_api_key,
-            groq_model,
+            api_base_url,
+            api_key,
+            api_model,
             db_path,
             whisper_model_path,
         }

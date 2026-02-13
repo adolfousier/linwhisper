@@ -205,13 +205,15 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
                 let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
 
                 match config_c.transcription_service {
-                    TranscriptionService::Groq => {
-                        let api_key = config_c.groq_api_key.clone().unwrap();
-                        let model = config_c.groq_model.clone();
+                    TranscriptionService::Api => {
+                        let base_url = config_c.api_base_url.clone();
+                        let api_key = config_c.api_key.clone().unwrap();
+                        let model = config_c.api_model.clone();
                         std::thread::spawn(move || {
                             let rt = tokio::runtime::Runtime::new().unwrap();
-                            let result =
-                                rt.block_on(crate::api::transcribe(&api_key, &model, wav));
+                            let result = rt.block_on(crate::api::transcribe(
+                                &base_url, &api_key, &model, wav,
+                            ));
                             let _ = tx.send(result);
                         });
                     }

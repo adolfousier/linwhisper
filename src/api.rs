@@ -1,8 +1,13 @@
 use reqwest::multipart;
 
-const GROQ_URL: &str = "https://api.groq.com/openai/v1/audio/transcriptions";
+pub async fn transcribe(
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    wav_data: Vec<u8>,
+) -> Result<String, String> {
+    let url = format!("{}/audio/transcriptions", base_url.trim_end_matches('/'));
 
-pub async fn transcribe(api_key: &str, model: &str, wav_data: Vec<u8>) -> Result<String, String> {
     let file_part = multipart::Part::bytes(wav_data)
         .file_name("audio.wav")
         .mime_str("audio/wav")
@@ -15,7 +20,7 @@ pub async fn transcribe(api_key: &str, model: &str, wav_data: Vec<u8>) -> Result
 
     let client = reqwest::Client::new();
     let resp = client
-        .post(GROQ_URL)
+        .post(&url)
         .bearer_auth(api_key)
         .multipart(form)
         .send()

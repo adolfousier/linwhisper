@@ -1,10 +1,10 @@
 [package]
 name = "linwhisper"
-version = "0.1.12"
+version = "0.1.13"
 edition = "2024"
 authors = ["Adolfo Usier"]
 license = "MIT"
-description = "Floating voice-to-text tool for Linux with local and cloud transcription"
+description = "Floating voice-to-text tool for Linux with local and API-based transcription"
 repository = "https://github.com/adolfousier/linwhisper"
 
 [dependencies]
