@@ -1,0 +1,8 @@
+/target
+.env
+*.deb
+.cargo/
+.claude/
+tasks/
+.env*
+

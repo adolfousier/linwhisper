@@ -1,0 +1,21 @@
+[package]
+name = "linwhisper"
+version = "0.1.0"
+edition = "2021"
+authors = ["Adolfo Usier"]
+license = "MIT"
+description = "Floating voice-to-text tool for Linux using Groq Whisper API"
+repository = "https://github.com/adolfousier/linwhisper"
+
+[dependencies]
+gtk4 = "0.9"
+cpal = "0.15"
+hound = "3.5"
+reqwest = { version = "0.12", features = ["multipart", "json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+dotenvy = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"
+dirs = "6"
