@@ -3,6 +3,7 @@ mod audio;
 mod config;
 mod db;
 mod input;
+mod local_stt;
 mod ui;
 
 use gtk4::prelude::*;

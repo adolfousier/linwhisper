@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.12
+
+- Added fully local transcription via whisper.cpp (whisper-rs + rubato)
+- New `PRIMARY_TRANSCRIPTION_SERVICE` env var: `local` or `groq`
+- `GROQ_API_KEY` only required when using Groq backend
+- New `WHISPER_MODEL` env var for selecting whisper model (default: ggml-base.en.bin)
+- Models stored in `~/.local/share/linwhisper/models/`
+- Clear error message with download instructions if model file is missing
+
 ## v0.1.11
 
 - Replaced Unicode emoji icons with GTK4 symbolic SVG icons (properly centered)

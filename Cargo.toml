@@ -1,10 +1,10 @@
 [package]
 name = "linwhisper"
-version = "0.1.11"
+version = "0.1.12"
 edition = "2024"
 authors = ["Adolfo Usier"]
 license = "MIT"
-description = "Floating voice-to-text tool for Linux using Groq Whisper API"
+description = "Floating voice-to-text tool for Linux with local and cloud transcription"
 repository = "https://github.com/adolfousier/linwhisper"
 
 [dependencies]
@@ -19,3 +19,5 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
 dirs = "6"
+whisper-rs = "0.15"
+rubato = "0.14"

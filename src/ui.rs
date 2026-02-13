@@ -6,8 +6,9 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use crate::audio::Recorder;
-use crate::config::Config;
+use crate::config::{Config, TranscriptionService};
 use crate::db::Db;
+use crate::local_stt::LocalWhisper;
 
 // Symbolic icon names (SVG-based, always centered)
 const ICON_IDLE: &str = "audio-input-microphone-symbolic";
@@ -136,6 +137,17 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
         Db::open(&config.db_path).expect("Failed to open database"),
     ));
 
+    // Init local whisper if configured
+    let local_whisper: Option<Arc<LocalWhisper>> =
+        if config.transcription_service == TranscriptionService::Local {
+            Some(Arc::new(
+                LocalWhisper::new(&config.whisper_model_path)
+                    .expect("Failed to load whisper model"),
+            ))
+        } else {
+            None
+        };
+
     // Shared state
     let state = Rc::new(RefCell::new(State::Idle));
     let recorder = Rc::new(RefCell::new(Recorder::new().expect("Failed to init audio")));
@@ -149,6 +161,7 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     let config_c = Arc::clone(&config);
     let db_c = Arc::clone(&db);
     let pp = Rc::clone(&pending_paste);
+    let lw_c = local_whisper.clone();
 
     button.connect_clicked(move |_| {
         let current = *state_c.borrow();
@@ -186,17 +199,30 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
                     }
                 };
 
-                let api_key = config_c.groq_api_key.clone();
-                let model = config_c.groq_model.clone();
                 let db_inner = Arc::clone(&db_c);
+                let sample_rate = rec_c.borrow().sample_rate();
 
                 let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
 
-                std::thread::spawn(move || {
-                    let rt = tokio::runtime::Runtime::new().unwrap();
-                    let result = rt.block_on(crate::api::transcribe(&api_key, &model, wav));
-                    let _ = tx.send(result);
-                });
+                match config_c.transcription_service {
+                    TranscriptionService::Groq => {
+                        let api_key = config_c.groq_api_key.clone().unwrap();
+                        let model = config_c.groq_model.clone();
+                        std::thread::spawn(move || {
+                            let rt = tokio::runtime::Runtime::new().unwrap();
+                            let result =
+                                rt.block_on(crate::api::transcribe(&api_key, &model, wav));
+                            let _ = tx.send(result);
+                        });
+                    }
+                    TranscriptionService::Local => {
+                        let whisper = lw_c.clone().unwrap();
+                        std::thread::spawn(move || {
+                            let result = whisper.transcribe(&wav, sample_rate);
+                            let _ = tx.send(result);
+                        });
+                    }
+                }
 
                 let btn2 = btn.clone();
                 let st2 = st.clone();
