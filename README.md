@@ -1,12 +1,12 @@
-# WhisperClip
+# WhisperCrabs
 
 Floating voice-to-text tool for Linux. Click to record, click to transcribe, text copied to clipboard. Supports fully local transcription via whisper.cpp or any OpenAI-compatible API endpoint (Groq, Ollama, OpenRouter, LM Studio, LocalAI, etc.).
 
-![WhisperClip button states](src/screenshots/ui-buttons.png)
+![WhisperCrabs button states](src/screenshots/ui-buttons.png)
 
 ## Privacy
 
-WhisperClip has no account, no telemetry, and no background processes. Your microphone is **never accessed** until you explicitly click the record button. Audio is captured in-memory, never written to disk. Only the transcribed text is stored locally in SQLite on your machine.
+WhisperCrabs has no account, no telemetry, and no background processes. Your microphone is **never accessed** until you explicitly click the record button. Audio is captured in-memory, never written to disk. Only the transcribed text is stored locally in SQLite on your machine.
 
 With **local mode** (`PRIMARY_TRANSCRIPTION_SERVICE=local`), everything stays on your machine - no network requests at all. With **API mode** (`PRIMARY_TRANSCRIPTION_SERVICE=api`), audio is sent to your configured endpoint (Groq by default, but can point to a local Ollama/LM Studio instance too).
 
@@ -28,12 +28,12 @@ With **local mode** (`PRIMARY_TRANSCRIPTION_SERVICE=local`), everything stays on
 
 **Debian/Ubuntu:**
 ```bash
-sudo apt install libgtk-4-dev libgraphene-1.0-dev libvulkan-dev libasound2-dev xclip cmake libclang-dev
+sudo apt install libgtk-4-dev libgraphene-1.0-dev libvulkan-dev libasound2-dev cmake libclang-dev
 ```
 
 **Arch Linux:**
 ```bash
-sudo pacman -S gtk4 graphene vulkan-icd-loader alsa-lib xclip cmake clang
+sudo pacman -S gtk4 graphene vulkan-icd-loader alsa-lib cmake clang
 ```
 
 ### Build tools
@@ -43,15 +43,14 @@ sudo pacman -S gtk4 graphene vulkan-icd-loader alsa-lib xclip cmake clang
 ### Runtime requirements
 
 - Works on both **Wayland** and **X11**
-- `xclip` for clipboard access
 - Working microphone
 
 ## Setup
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/adolfousier/whisperclip.git
-   cd whisperclip
+   git clone https://github.com/adolfousier/whispercrabs.git
+   cd whispercrabs
    ```
 
 2. Build and run:
@@ -74,8 +73,8 @@ sudo pacman -S gtk4 graphene vulkan-icd-loader alsa-lib xclip cmake clang
    **Without just** (manual setup):
    ```bash
    # Download a whisper model for local mode
-   mkdir -p ~/.local/share/whisperclip/models
-   curl -L -o ~/.local/share/whisperclip/models/ggml-base.en.bin \
+   mkdir -p ~/.local/share/whispercrabs/models
+   curl -L -o ~/.local/share/whispercrabs/models/ggml-base.en.bin \
      https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
 
    # Set backend in .env
@@ -121,16 +120,16 @@ This is especially useful with local models that may take a few seconds to trans
 
 ## Keyboard Shortcuts
 
-WhisperClip exposes D-Bus actions that you can bind to global keyboard shortcuts in your desktop environment. This works on **GNOME, KDE, Sway, Hyprland, i3**, and any DE that supports custom shortcuts.
+WhisperCrabs exposes D-Bus actions that you can bind to global keyboard shortcuts in your desktop environment. This works on **GNOME, KDE, Sway, Hyprland, i3**, and any DE that supports custom shortcuts.
 
 **Start recording** (raises window and begins recording):
 ```
-gdbus call --session --dest=dev.whisperclip.app --object-path=/dev/whisperclip/app --method=org.gtk.Actions.Activate record [] {}
+gdbus call --session --dest=dev.whispercrabs.app --object-path=/dev/whispercrabs/app --method=org.gtk.Actions.Activate record [] {}
 ```
 
 **Stop recording** (stops recording and triggers transcription):
 ```
-gdbus call --session --dest=dev.whisperclip.app --object-path=/dev/whisperclip/app --method=org.gtk.Actions.Activate stop [] {}
+gdbus call --session --dest=dev.whispercrabs.app --object-path=/dev/whispercrabs/app --method=org.gtk.Actions.Activate stop [] {}
 ```
 
 ### GNOME
@@ -139,8 +138,8 @@ Settings > Keyboard > Custom Shortcuts:
 
 | Name | Command | Suggested shortcut |
 |------|---------|-------------------|
-| WhisperClip Record | `gdbus call --session --dest=dev.whisperclip.app --object-path=/dev/whisperclip/app --method=org.gtk.Actions.Activate record [] {}` | Alt+Shift+R |
-| WhisperClip Stop | `gdbus call --session --dest=dev.whisperclip.app --object-path=/dev/whisperclip/app --method=org.gtk.Actions.Activate stop [] {}` | Alt+Shift+S |
+| WhisperCrabs Record | `gdbus call --session --dest=dev.whispercrabs.app --object-path=/dev/whispercrabs/app --method=org.gtk.Actions.Activate record [] {}` | Alt+Shift+R |
+| WhisperCrabs Stop | `gdbus call --session --dest=dev.whispercrabs.app --object-path=/dev/whispercrabs/app --method=org.gtk.Actions.Activate stop [] {}` | Alt+Shift+S |
 
 ### KDE Plasma
 
@@ -151,12 +150,12 @@ System Settings > Shortcuts > Custom Shortcuts > Edit > New > Global Shortcut > 
 Add to your config:
 ```
 # Sway / i3
-bindsym Alt+Shift+r exec gdbus call --session --dest=dev.whisperclip.app --object-path=/dev/whisperclip/app --method=org.gtk.Actions.Activate record [] {}
-bindsym Alt+Shift+s exec gdbus call --session --dest=dev.whisperclip.app --object-path=/dev/whisperclip/app --method=org.gtk.Actions.Activate stop [] {}
+bindsym Alt+Shift+r exec gdbus call --session --dest=dev.whispercrabs.app --object-path=/dev/whispercrabs/app --method=org.gtk.Actions.Activate record [] {}
+bindsym Alt+Shift+s exec gdbus call --session --dest=dev.whispercrabs.app --object-path=/dev/whispercrabs/app --method=org.gtk.Actions.Activate stop [] {}
 
 # Hyprland
-bind = ALT SHIFT, R, exec, gdbus call --session --dest=dev.whisperclip.app --object-path=/dev/whisperclip/app --method=org.gtk.Actions.Activate record [] {}
-bind = ALT SHIFT, S, exec, gdbus call --session --dest=dev.whisperclip.app --object-path=/dev/whisperclip/app --method=org.gtk.Actions.Activate stop [] {}
+bind = ALT SHIFT, R, exec, gdbus call --session --dest=dev.whispercrabs.app --object-path=/dev/whispercrabs/app --method=org.gtk.Actions.Activate record [] {}
+bind = ALT SHIFT, S, exec, gdbus call --session --dest=dev.whispercrabs.app --object-path=/dev/whispercrabs/app --method=org.gtk.Actions.Activate stop [] {}
 ```
 
 ## Compatible API Backends
@@ -202,7 +201,7 @@ API_MODEL=whisper-1
 | Local STT | whisper-rs (whisper.cpp) + rubato |
 | API STT | reqwest + OpenAI-compatible API |
 | Database | rusqlite (bundled SQLite) |
-| Clipboard | xclip |
+| Clipboard | arboard |
 | Config | dotenvy |
 
 ## License

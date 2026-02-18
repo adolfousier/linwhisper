@@ -1,22 +1,11 @@
-use std::process::Command;
+use arboard::Clipboard;
 
-/// Copy text to clipboard via xclip.
+/// Copy text to the system clipboard (cross-platform).
 pub fn copy_to_clipboard(text: &str) -> Result<(), String> {
-    let mut child = Command::new("xclip")
-        .args(["-selection", "clipboard"])
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn xclip: {e}"))?;
-
-    if let Some(ref mut stdin) = child.stdin {
-        use std::io::Write;
-        stdin
-            .write_all(text.as_bytes())
-            .map_err(|e| format!("Failed to write to xclip: {e}"))?;
-    }
-    child
-        .wait()
-        .map_err(|e| format!("xclip failed: {e}"))?;
-
+    let mut clipboard =
+        Clipboard::new().map_err(|e| format!("Failed to open clipboard: {e}"))?;
+    clipboard
+        .set_text(text)
+        .map_err(|e| format!("Failed to copy to clipboard: {e}"))?;
     Ok(())
 }

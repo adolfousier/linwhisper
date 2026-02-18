@@ -13,7 +13,7 @@ fn main() {
     let config = Arc::new(config::Config::load());
 
     let app = gtk4::Application::builder()
-        .application_id("dev.whisperclip.app")
+        .application_id("dev.whispercrabs.app")
         .build();
 
     let config_c = Arc::clone(&config);

@@ -1,0 +1,142 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: whispercrabs-linux-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: whispercrabs-macos-aarch64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: whispercrabs-windows-x86_64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The repo .cargo/config.toml points at local dev paths — remove for CI
+      - name: Remove local cargo overrides
+        shell: bash
+        run: rm -f .cargo/config.toml
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # ── Linux ──────────────────────────────────────────────
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-4-dev libgraphene-1.0-dev libvulkan-dev \
+            libasound2-dev cmake libclang-dev
+
+      # ── macOS ──────────────────────────────────────────────
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install gtk4 cmake
+
+      # ── Windows ────────────────────────────────────────────
+      - name: Set up Python (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: GTK4 cache (Windows)
+        if: runner.os == 'Windows'
+        id: cache-gtk
+        uses: actions/cache@v4
+        with:
+          path: C:\gtk-build
+          key: gvsbuild-gtk4-${{ runner.os }}
+
+      - name: Build GTK4 with gvsbuild (Windows)
+        if: runner.os == 'Windows' && steps.cache-gtk.outputs.cache-hit != 'true'
+        run: |
+          pip install gvsbuild
+          gvsbuild build gtk4
+
+      - name: Set GTK4 environment (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $gtkBin = "C:\gtk-build\gtk\x64\release\bin"
+          $gtkLib = "C:\gtk-build\gtk\x64\release\lib"
+          echo "$gtkBin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "PKG_CONFIG_PATH=$gtkLib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "LIB=$gtkLib" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      # ── Build ──────────────────────────────────────────────
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # ── Package ────────────────────────────────────────────
+      - name: Package (Linux / macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir staging
+          cp "target/${{ matrix.target }}/release/whispercrabs" staging/
+          tar -czf "${{ matrix.artifact }}.tar.gz" -C staging .
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path staging -Force
+          Copy-Item "target\${{ matrix.target }}\release\whispercrabs.exe" staging\
+          # Bundle required GTK4 runtime DLLs
+          Copy-Item "C:\gtk-build\gtk\x64\release\bin\*.dll" staging\
+          Compress-Archive -Path staging\* -DestinationPath "${{ matrix.artifact }}.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}.tar.gz
+            ${{ matrix.artifact }}.zip
+          if-no-files-found: ignore
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            whispercrabs-linux-x86_64/*.tar.gz
+            whispercrabs-macos-aarch64/*.tar.gz
+            whispercrabs-windows-x86_64/*.zip

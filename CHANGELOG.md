@@ -11,7 +11,7 @@
 - Wayland-native: works on GNOME Wayland without X11 tools
 - Updated README with keyboard shortcut setup for all major DEs
 - Added dates to all changelog entries
-- Renamed project from LinWhisper to **WhisperClip**
+- Renamed project from LinWhisper to **WhisperCrabs**
 
 ## v0.1.13 — 2026-02-13
 
@@ -27,7 +27,7 @@
 - New `PRIMARY_TRANSCRIPTION_SERVICE` env var: `local` or `groq`
 - `GROQ_API_KEY` only required when using Groq backend
 - New `WHISPER_MODEL` env var for selecting whisper model (default: ggml-base.en.bin)
-- Models stored in `~/.local/share/whisperclip/models/`
+- Models stored in `~/.local/share/whispercrabs/models/`
 - Clear error message with download instructions if model file is missing
 
 ## v0.1.11 — 2026-02-13

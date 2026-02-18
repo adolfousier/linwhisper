@@ -1,4 +1,4 @@
-models_dir := env("HOME") / ".local/share/whisperclip/models"
+models_dir := env("HOME") / ".local/share/whispercrabs/models"
 default_model := "ggml-base.en.bin"
 
 # Build release binary

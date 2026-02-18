@@ -1,11 +1,11 @@
 [package]
-name = "whisperclip"
+name = "whispercrabs"
 version = "0.1.14"
 edition = "2024"
 authors = ["Adolfo Usier"]
 license = "MIT"
 description = "Floating voice-to-text tool for Linux with local and API-based transcription"
-repository = "https://github.com/adolfousier/whisperclip"
+repository = "https://github.com/adolfousier/whispercrabs"
 
 [dependencies]
 gtk4 = "0.9"
@@ -22,3 +22,4 @@ dirs = "6"
 whisper-rs = "0.15"
 rubato = "0.14"
 rodio = { version = "0.19", default-features = false, features = ["wav"] }
+arboard = "3"

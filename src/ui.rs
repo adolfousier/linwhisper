@@ -111,7 +111,7 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
 
     let window = gtk4::ApplicationWindow::builder()
         .application(app)
-        .title("WhisperClip")
+        .title("WhisperCrabs")
         .default_width(88)
         .default_height(100)
         .decorated(false)
@@ -395,17 +395,20 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
         eprintln!("[dbus] 'record' action activated");
         win_rec.present();
         // GNOME Wayland: force-activate via Shell D-Bus (falls back silently on other DEs)
-        let _ = std::process::Command::new("gdbus")
-            .args([
-                "call", "--session",
-                "--dest=org.gnome.Shell",
-                "--object-path=/org/gnome/Shell",
-                "--method=org.gnome.Shell.Eval",
-                r#"global.get_window_actors().find(a=>a.meta_window.title==='WhisperClip')?.meta_window.activate(0)"#,
-            ])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
+        #[cfg(target_os = "linux")]
+        {
+            let _ = std::process::Command::new("gdbus")
+                .args([
+                    "call", "--session",
+                    "--dest=org.gnome.Shell",
+                    "--object-path=/org/gnome/Shell",
+                    "--method=org.gnome.Shell.Eval",
+                    r#"global.get_window_actors().find(a=>a.meta_window.title==='WhisperCrabs')?.meta_window.activate(0)"#,
+                ])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+        }
         if *state_rec.borrow() == State::Idle {
             btn_rec.emit_clicked();
         }
@@ -429,20 +432,26 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
 
 
 fn save_window_position(win: &gtk4::ApplicationWindow, db: &Arc<Mutex<Db>>) {
-    let title = win.title().map(|t| t.to_string()).unwrap_or_default();
-    if let Ok(output) = std::process::Command::new("xdotool")
-        .args(["search", "--name", &title, "getwindowgeometry"])
-        .output()
+    #[cfg(not(target_os = "linux"))]
+    let _ = (&win, &db);
+
+    #[cfg(target_os = "linux")]
     {
-        let text = String::from_utf8_lossy(&output.stdout);
-        for line in text.lines() {
-            if let Some(pos) = line.strip_prefix("  Position: ") {
-                if let Some((xs, ys)) = pos.split_once(',') {
-                    let x = xs.trim();
-                    let y = ys.split_whitespace().next().unwrap_or("0");
-                    if let Ok(db) = db.lock() {
-                        let _ = db.set_setting("window_x", x);
-                        let _ = db.set_setting("window_y", y);
+        let title = win.title().map(|t| t.to_string()).unwrap_or_default();
+        if let Ok(output) = std::process::Command::new("xdotool")
+            .args(["search", "--name", &title, "getwindowgeometry"])
+            .output()
+        {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                if let Some(pos) = line.strip_prefix("  Position: ") {
+                    if let Some((xs, ys)) = pos.split_once(',') {
+                        let x = xs.trim();
+                        let y = ys.split_whitespace().next().unwrap_or("0");
+                        if let Ok(db) = db.lock() {
+                            let _ = db.set_setting("window_x", x);
+                            let _ = db.set_setting("window_y", y);
+                        }
                     }
                 }
             }
@@ -479,18 +488,21 @@ fn position_window(_window: &gtk4::ApplicationWindow, db: &Arc<Mutex<Db>>) {
         }
     };
 
-    let title = "WhisperClip";
-    let _ = std::process::Command::new("xdotool")
-        .args([
-            "search", "--name", title,
-            "windowmove", &x.to_string(), &y.to_string(),
-        ])
-        .status();
+    #[cfg(target_os = "linux")]
+    {
+        let title = "WhisperCrabs";
+        let _ = std::process::Command::new("xdotool")
+            .args([
+                "search", "--name", title,
+                "windowmove", &x.to_string(), &y.to_string(),
+            ])
+            .status();
+    }
 }
 
 fn show_history_dialog(_window: &gtk4::ApplicationWindow, db: &Arc<Mutex<Db>>) {
     let dialog = gtk4::Window::builder()
-        .title("WhisperClip History")
+        .title("WhisperCrabs History")
         .default_width(400)
         .default_height(300)
         .build();
