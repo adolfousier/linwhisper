@@ -1,6 +1,6 @@
 [package]
 name = "whispercrabs"
-version = "0.1.14"
+version = "0.1.15"
 edition = "2024"
 authors = ["Adolfo Usier"]
 license = "MIT"
@@ -11,7 +11,7 @@ repository = "https://github.com/adolfousier/whispercrabs"
 gtk4 = "0.9"
 cpal = "0.15"
 hound = "3.5"
-reqwest = { version = "0.12", features = ["multipart", "json"] }
+reqwest = { version = "0.12", features = ["multipart", "json", "blocking"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 dotenvy = "0.15"

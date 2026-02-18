@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.1.15 — 2026-02-18
+
+- Runtime transcription mode switching via right-click menu (API Mode / Local Mode radio items)
+- Switching to Local auto-downloads the whisper model if missing, with progress display (MB / total MB)
+- Switching to API deletes the local model file to free disk space
+- Mode choice persists across restarts (saved to DB)
+- App no longer panics on startup when API key is missing or model file is absent
+- Guards: blocks recording during model download, blocks mode switch during recording/processing
+- Graceful error handling: missing API key or model shows status message instead of crashing
+
 ## v0.1.14 — 2026-02-13
 
 - Global keyboard shortcuts via D-Bus actions (`record`, `stop`) — works on GNOME, KDE, Sway, Hyprland, i3

@@ -18,11 +18,41 @@ With **local mode** (`PRIMARY_TRANSCRIPTION_SERVICE=local`), everything stays on
 - Local transcription via whisper.cpp (no internet required)
 - API transcription via any OpenAI-compatible endpoint (Groq, Ollama, OpenRouter, LM Studio, LocalAI)
 - Transcribed text copied to clipboard automatically
+- Runtime mode switching via right-click menu (auto-downloads model, deletes on switch back)
 - SQLite history with right-click access
 - No background mic access - recording only on explicit click
 - Audio stays in-memory, never saved to disk
 
-## Dependencies
+## Quick Install
+
+Download the pre-built binary from the latest release and run it. No build tools or Rust toolchain needed.
+
+```bash
+# Download latest release
+gh release download --repo adolfousier/whispercrabs --pattern 'whispercrabs-*-linux-x86_64.tar.gz'
+tar xzf whispercrabs-*-linux-x86_64.tar.gz
+chmod +x whispercrabs
+
+# Run (starts in API mode by default)
+./whispercrabs
+```
+
+**For local mode**: right-click the button and select "Local Mode" — the whisper model downloads automatically.
+
+**For API mode**: create a `.env` file next to the binary (or export the variable):
+```bash
+echo 'API_KEY=your-api-key-here' > .env
+```
+
+### Runtime requirements
+
+- **GTK 4** runtime libraries (usually pre-installed on GNOME desktops)
+- Working microphone
+- Wayland or X11
+
+> **AI Agent note**: WhisperCrabs is fully controllable via D-Bus from the command line. An AI agent can set up WhisperCrabs for a user by: (1) downloading the binary from a GitHub release, (2) writing a `.env` with the user's API key, (3) launching the binary, and (4) switching transcription mode via D-Bus — no build step required. See the [D-Bus Control](#d-bus-control) section for all available commands.
+
+## Build from Source
 
 ### System packages
 
@@ -40,12 +70,7 @@ sudo pacman -S gtk4 graphene vulkan-icd-loader alsa-lib cmake clang
 
 - [just](https://github.com/casey/just) (optional, for convenient commands)
 
-### Runtime requirements
-
-- Works on both **Wayland** and **X11**
-- Working microphone
-
-## Setup
+### Build & run
 
 1. Clone the repository:
    ```bash
@@ -103,7 +128,7 @@ Models are downloaded from [HuggingFace (ggerganov/whisper.cpp)](https://hugging
 | **Left-click** | Start recording (button turns green with pulse) |
 | **Left-click again** | Stop recording, transcribe, copy to clipboard |
 | **Esc** (when focused) | Stop recording |
-| **Right-click** | Popover menu with History and Quit |
+| **Right-click** | Popover menu: switch mode (API/Local), History, Quit |
 | **Drag** | Move the button anywhere on screen |
 
 After transcription completes, the text is copied to your clipboard. Paste with **Ctrl+V** wherever you need it.
@@ -118,19 +143,33 @@ SOUND_NOTIFICATION_ON_COMPLETION=true
 
 This is especially useful with local models that may take a few seconds to transcribe. You can keep working in another window, hear the notification when it's done, and just Ctrl+V to paste.
 
-## Keyboard Shortcuts
+## D-Bus Control
 
-WhisperCrabs exposes D-Bus actions that you can bind to global keyboard shortcuts in your desktop environment. This works on **GNOME, KDE, Sway, Hyprland, i3**, and any DE that supports custom shortcuts.
+WhisperCrabs exposes D-Bus actions for full CLI control. Bind these to keyboard shortcuts, use them from scripts, or call them from an AI agent.
 
 **Start recording** (raises window and begins recording):
-```
+```bash
 gdbus call --session --dest=dev.whispercrabs.app --object-path=/dev/whispercrabs/app --method=org.gtk.Actions.Activate record [] {}
 ```
 
 **Stop recording** (stops recording and triggers transcription):
-```
+```bash
 gdbus call --session --dest=dev.whispercrabs.app --object-path=/dev/whispercrabs/app --method=org.gtk.Actions.Activate stop [] {}
 ```
+
+**Switch to local mode** (auto-downloads model if missing):
+```bash
+gdbus call --session --dest=dev.whispercrabs.app --object-path=/dev/whispercrabs/app --method=org.gtk.Actions.Activate transcription-mode "[<'local'>]" {}
+```
+
+**Switch to API mode** (deletes local model to free disk):
+```bash
+gdbus call --session --dest=dev.whispercrabs.app --object-path=/dev/whispercrabs/app --method=org.gtk.Actions.Activate transcription-mode "[<'api'>]" {}
+```
+
+### Keyboard Shortcuts
+
+These D-Bus commands work on **GNOME, KDE, Sway, Hyprland, i3**, and any DE that supports custom shortcuts.
 
 ### GNOME
 

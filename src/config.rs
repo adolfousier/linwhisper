@@ -13,6 +13,7 @@ pub struct Config {
     pub api_model: String,
     pub db_path: PathBuf,
     pub whisper_model_path: PathBuf,
+    pub whisper_model_name: String,
     pub sound_notification: bool,
 }
 
@@ -40,10 +41,6 @@ impl Config {
             .or_else(|_| std::env::var("GROQ_API_KEY"))
             .ok();
 
-        if transcription_service == TranscriptionService::Api && api_key.is_none() {
-            panic!("API_KEY must be set when PRIMARY_TRANSCRIPTION_SERVICE=api (legacy: GROQ_API_KEY also accepted)");
-        }
-
         // API_MODEL with GROQ_STT_MODEL as legacy fallback
         let api_model = std::env::var("API_MODEL")
             .or_else(|_| std::env::var("GROQ_STT_MODEL"))
@@ -57,21 +54,9 @@ impl Config {
 
         let models_dir = data_dir.join("models");
         std::fs::create_dir_all(&models_dir).ok();
-        let model_name =
+        let whisper_model_name =
             std::env::var("WHISPER_MODEL").unwrap_or_else(|_| "ggml-base.en.bin".into());
-        let whisper_model_path = models_dir.join(&model_name);
-
-        if transcription_service == TranscriptionService::Local && !whisper_model_path.exists() {
-            eprintln!("ERROR: Whisper model not found at {}", whisper_model_path.display());
-            eprintln!("Download it with:");
-            eprintln!(
-                "  mkdir -p {} && curl -L -o {} https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{}",
-                models_dir.display(),
-                whisper_model_path.display(),
-                model_name,
-            );
-            std::process::exit(1);
-        }
+        let whisper_model_path = models_dir.join(&whisper_model_name);
 
         let sound_notification = std::env::var("SOUND_NOTIFICATION_ON_COMPLETION")
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
@@ -84,7 +69,15 @@ impl Config {
             api_model,
             db_path,
             whisper_model_path,
+            whisper_model_name,
             sound_notification,
         }
+    }
+
+    pub fn whisper_model_url(&self) -> String {
+        format!(
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{}",
+            self.whisper_model_name
+        )
     }
 }

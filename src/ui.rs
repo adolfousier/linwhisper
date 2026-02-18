@@ -17,13 +17,12 @@ fn play_notification() {
     std::thread::spawn(|| {
         use rodio::{Decoder, OutputStream, Sink};
         use std::io::Cursor;
-        if let Ok((_stream, handle)) = OutputStream::try_default() {
-            if let Ok(sink) = Sink::try_new(&handle) {
-                if let Ok(source) = Decoder::new(Cursor::new(NOTIFICATION_SOUND)) {
-                    sink.append(source);
-                    sink.sleep_until_end();
-                }
-            }
+        if let Ok((_stream, handle)) = OutputStream::try_default()
+            && let Ok(sink) = Sink::try_new(&handle)
+            && let Ok(source) = Decoder::new(Cursor::new(NOTIFICATION_SOUND))
+        {
+            sink.append(source);
+            sink.sleep_until_end();
         }
     });
 }
@@ -99,6 +98,12 @@ enum State {
     Processing,
 }
 
+struct RuntimeState {
+    active_service: TranscriptionService,
+    local_whisper: Option<Arc<LocalWhisper>>,
+    downloading: bool,
+}
+
 pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     // Load CSS
     let provider = gtk4::CssProvider::new();
@@ -152,16 +157,40 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
         Db::open(&config.db_path).expect("Failed to open database"),
     ));
 
-    // Init local whisper if configured
-    let local_whisper: Option<Arc<LocalWhisper>> =
-        if config.transcription_service == TranscriptionService::Local {
-            Some(Arc::new(
-                LocalWhisper::new(&config.whisper_model_path)
-                    .expect("Failed to load whisper model"),
-            ))
+    // Determine initial mode: DB setting overrides env var
+    let initial_service = {
+        let db_mode = db
+            .lock()
+            .ok()
+            .and_then(|d| d.get_setting("transcription_mode").ok().flatten());
+        match db_mode.as_deref() {
+            Some("local") => TranscriptionService::Local,
+            Some("api") => TranscriptionService::Api,
+            None => config.transcription_service,
+            _ => config.transcription_service,
+        }
+    };
+
+    // Init local whisper only if Local mode AND model file exists
+    let initial_whisper: Option<Arc<LocalWhisper>> =
+        if initial_service == TranscriptionService::Local && config.whisper_model_path.exists() {
+            match LocalWhisper::new(&config.whisper_model_path) {
+                Ok(w) => Some(Arc::new(w)),
+                Err(e) => {
+                    eprintln!("Failed to load whisper model: {e}");
+                    None
+                }
+            }
         } else {
             None
         };
+
+    // Runtime state (UI-thread only)
+    let runtime = Rc::new(RefCell::new(RuntimeState {
+        active_service: initial_service,
+        local_whisper: initial_whisper,
+        downloading: false,
+    }));
 
     // Shared state
     let state = Rc::new(RefCell::new(State::Idle));
@@ -174,12 +203,37 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     let rec_c = Rc::clone(&recorder);
     let config_c = Arc::clone(&config);
     let db_c = Arc::clone(&db);
-    let lw_c = local_whisper.clone();
+    let runtime_c = Rc::clone(&runtime);
 
     button.connect_clicked(move |_| {
         let current = *state_c.borrow();
         match current {
             State::Idle => {
+                // Guard: block recording during model download
+                if runtime_c.borrow().downloading {
+                    st.set_label("Downloading model...");
+                    st.set_opacity(1.0);
+                    return;
+                }
+
+                // Guard: Local mode without loaded model
+                let rt = runtime_c.borrow();
+                if rt.active_service == TranscriptionService::Local && rt.local_whisper.is_none() {
+                    drop(rt);
+                    st.set_label("No local model loaded");
+                    st.set_opacity(1.0);
+                    return;
+                }
+
+                // Guard: API mode without API key
+                if rt.active_service == TranscriptionService::Api && config_c.api_key.is_none() {
+                    drop(rt);
+                    st.set_label("No API key set");
+                    st.set_opacity(1.0);
+                    return;
+                }
+                drop(rt);
+
                 if let Err(e) = rec_c.borrow_mut().start() {
                     eprintln!("Record start error: {e}");
                     st.set_label(&format!("Err: {e}"));
@@ -216,7 +270,8 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
 
                 let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
 
-                match config_c.transcription_service {
+                let rt = runtime_c.borrow();
+                match rt.active_service {
                     TranscriptionService::Api => {
                         let base_url = config_c.api_base_url.clone();
                         let api_key = config_c.api_key.clone().unwrap();
@@ -230,13 +285,14 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
                         });
                     }
                     TranscriptionService::Local => {
-                        let whisper = lw_c.clone().unwrap();
+                        let whisper = rt.local_whisper.clone().unwrap();
                         std::thread::spawn(move || {
                             let result = whisper.transcribe(&wav, sample_rate);
                             let _ = tx.send(result);
                         });
                     }
                 }
+                drop(rt);
 
                 let btn2 = btn.clone();
                 let st2 = st.clone();
@@ -245,10 +301,10 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
                 glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
                     match rx.try_recv() {
                         Ok(Ok(text)) => {
-                            if let Ok(db) = db_inner.lock() {
-                                if let Err(e) = db.insert(&text) {
-                                    eprintln!("DB insert error: {e}");
-                                }
+                            if let Ok(db) = db_inner.lock()
+                                && let Err(e) = db.insert(&text)
+                            {
+                                eprintln!("DB insert error: {e}");
                             }
                             match crate::input::copy_to_clipboard(&text) {
                                 Ok(_) => {
@@ -311,11 +367,28 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     });
 
     // --- Right-click popover menu (on the button) ---
-    // Use a PopoverMenu so it works inside WindowHandle
-    // (WindowHandle steals raw right-clicks for the WM menu)
+    let mode_action = gtk4::gio::SimpleAction::new_stateful(
+        "transcription-mode",
+        Some(&String::static_variant_type()),
+        &(if initial_service == TranscriptionService::Api {
+            "api"
+        } else {
+            "local"
+        })
+        .to_variant(),
+    );
+
+    let transcription_section = gtk4::gio::Menu::new();
+    transcription_section.append(Some("API Mode"), Some("app.transcription-mode::api"));
+    transcription_section.append(Some("Local Mode"), Some("app.transcription-mode::local"));
+
+    let actions_section = gtk4::gio::Menu::new();
+    actions_section.append(Some("History"), Some("app.show-history"));
+    actions_section.append(Some("Quit"), Some("app.quit"));
+
     let menu = gtk4::gio::Menu::new();
-    menu.append(Some("History"), Some("app.show-history"));
-    menu.append(Some("Quit"), Some("app.quit"));
+    menu.append_section(Some("Transcription"), &transcription_section);
+    menu.append_section(None, &actions_section);
 
     let popover = gtk4::PopoverMenu::from_model(Some(&menu));
     popover.set_parent(&button);
@@ -330,6 +403,54 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
         pop.popup();
     });
     button.add_controller(gesture);
+
+    // Action: transcription mode switch
+    let runtime_mode = Rc::clone(&runtime);
+    let state_mode = Rc::clone(&state);
+    let config_mode = Arc::clone(&config);
+    let db_mode = Arc::clone(&db);
+    let status_mode = status.clone();
+    mode_action.connect_activate(move |action, param| {
+        let chosen: String = param.unwrap().get::<String>().unwrap();
+
+        // Guard: block mode switch during recording/processing
+        if *state_mode.borrow() != State::Idle {
+            return;
+        }
+
+        // Guard: block mode switch during download
+        if runtime_mode.borrow().downloading {
+            return;
+        }
+
+        let current = if runtime_mode.borrow().active_service == TranscriptionService::Api {
+            "api"
+        } else {
+            "local"
+        };
+        if chosen == current {
+            return;
+        }
+
+        if chosen == "api" {
+            switch_to_api(
+                &runtime_mode,
+                &config_mode,
+                &db_mode,
+                action,
+                &status_mode,
+            );
+        } else {
+            switch_to_local(
+                &runtime_mode,
+                &config_mode,
+                &db_mode,
+                action,
+                &status_mode,
+            );
+        }
+    });
+    app.add_action(&mode_action);
 
     // Action: show history
     let history_action = gtk4::gio::SimpleAction::new("show-history", None);
@@ -357,10 +478,10 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     // --- Position: saved or bottom-right ---
     let db_pos = Arc::clone(&db);
     window.connect_realize(move |win| {
-        if let Some(surface) = win.surface() {
-            if let Some(toplevel) = surface.downcast_ref::<gdk::Toplevel>() {
-                toplevel.set_decorated(false);
-            }
+        if let Some(surface) = win.surface()
+            && let Some(toplevel) = surface.downcast_ref::<gdk::Toplevel>()
+        {
+            toplevel.set_decorated(false);
         }
         let w = win.clone();
         let db_p = Arc::clone(&db_pos);
@@ -430,6 +551,248 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     window.present();
 }
 
+fn switch_to_api(
+    runtime: &Rc<RefCell<RuntimeState>>,
+    config: &Arc<Config>,
+    db: &Arc<Mutex<Db>>,
+    action: &gtk4::gio::SimpleAction,
+    status: &gtk4::Label,
+) {
+    let mut rt = runtime.borrow_mut();
+    rt.active_service = TranscriptionService::Api;
+    rt.local_whisper = None;
+    drop(rt);
+
+    // Delete model file to free disk space
+    if config.whisper_model_path.exists()
+        && let Err(e) = std::fs::remove_file(&config.whisper_model_path)
+    {
+        eprintln!("Failed to delete model file: {e}");
+    }
+
+    // Persist to DB
+    if let Ok(d) = db.lock() {
+        let _ = d.set_setting("transcription_mode", "api");
+    }
+
+    action.set_state(&"api".to_variant());
+
+    status.set_label("API mode");
+    status.set_opacity(1.0);
+    let st = status.clone();
+    glib::timeout_add_local_once(std::time::Duration::from_secs(2), move || {
+        st.set_opacity(0.0);
+    });
+}
+
+fn switch_to_local(
+    runtime: &Rc<RefCell<RuntimeState>>,
+    config: &Arc<Config>,
+    db: &Arc<Mutex<Db>>,
+    action: &gtk4::gio::SimpleAction,
+    status: &gtk4::Label,
+) {
+    // Set active service immediately so the menu reflects the choice
+    runtime.borrow_mut().active_service = TranscriptionService::Local;
+    action.set_state(&"local".to_variant());
+
+    // Persist to DB
+    if let Ok(d) = db.lock() {
+        let _ = d.set_setting("transcription_mode", "local");
+    }
+
+    if config.whisper_model_path.exists() {
+        // Model exists — load it on a background thread
+        load_whisper_model(runtime, config, action, status);
+    } else {
+        // Model missing — download then load
+        download_and_load_model(runtime, config, action, status);
+    }
+}
+
+fn load_whisper_model(
+    runtime: &Rc<RefCell<RuntimeState>>,
+    config: &Arc<Config>,
+    action: &gtk4::gio::SimpleAction,
+    status: &gtk4::Label,
+) {
+    status.set_label("Loading model...");
+    status.set_opacity(1.0);
+
+    let model_path = config.whisper_model_path.clone();
+    let (tx, rx) = std::sync::mpsc::channel::<Result<Arc<LocalWhisper>, String>>();
+
+    std::thread::spawn(move || {
+        let result = LocalWhisper::new(&model_path).map(Arc::new);
+        let _ = tx.send(result);
+    });
+
+    let runtime_c = Rc::clone(runtime);
+    let action_c = action.clone();
+    let st = status.clone();
+    glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+        match rx.try_recv() {
+            Ok(Ok(whisper)) => {
+                runtime_c.borrow_mut().local_whisper = Some(whisper);
+                st.set_label("Local mode ready");
+                let st2 = st.clone();
+                glib::timeout_add_local_once(std::time::Duration::from_secs(2), move || {
+                    st2.set_opacity(0.0);
+                });
+                glib::ControlFlow::Break
+            }
+            Ok(Err(e)) => {
+                eprintln!("Failed to load whisper model: {e}");
+                // Revert to API
+                runtime_c.borrow_mut().active_service = TranscriptionService::Api;
+                action_c.set_state(&"api".to_variant());
+                st.set_label("Model load failed");
+                let st2 = st.clone();
+                glib::timeout_add_local_once(std::time::Duration::from_secs(3), move || {
+                    st2.set_opacity(0.0);
+                });
+                glib::ControlFlow::Break
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(_) => {
+                runtime_c.borrow_mut().active_service = TranscriptionService::Api;
+                action_c.set_state(&"api".to_variant());
+                st.set_label("Model load failed");
+                let st2 = st.clone();
+                glib::timeout_add_local_once(std::time::Duration::from_secs(3), move || {
+                    st2.set_opacity(0.0);
+                });
+                glib::ControlFlow::Break
+            }
+        }
+    });
+}
+
+/// Download progress messages sent from the background thread
+enum DownloadMsg {
+    Progress(u64, Option<u64>), // downloaded, total
+    Done,
+    Error(String),
+}
+
+fn download_and_load_model(
+    runtime: &Rc<RefCell<RuntimeState>>,
+    config: &Arc<Config>,
+    action: &gtk4::gio::SimpleAction,
+    status: &gtk4::Label,
+) {
+    runtime.borrow_mut().downloading = true;
+
+    status.set_label("Downloading model...");
+    status.set_opacity(1.0);
+
+    let url = config.whisper_model_url();
+    let model_path = config.whisper_model_path.clone();
+    let part_path = model_path.with_extension("bin.part");
+
+    let (tx, rx) = std::sync::mpsc::channel::<DownloadMsg>();
+
+    std::thread::spawn(move || {
+        let result = (|| -> Result<(), String> {
+            let resp = reqwest::blocking::Client::new()
+                .get(&url)
+                .send()
+                .map_err(|e| format!("Download request failed: {e}"))?;
+
+            if !resp.status().is_success() {
+                return Err(format!("Download failed: HTTP {}", resp.status()));
+            }
+
+            let total = resp.content_length();
+            let mut downloaded: u64 = 0;
+
+            let mut file = std::fs::File::create(&part_path)
+                .map_err(|e| format!("Failed to create file: {e}"))?;
+
+            use std::io::{Read, Write};
+            let mut reader = resp;
+            let mut buf = [0u8; 65536];
+            loop {
+                let n = reader
+                    .read(&mut buf)
+                    .map_err(|e| format!("Download read error: {e}"))?;
+                if n == 0 {
+                    break;
+                }
+                file.write_all(&buf[..n])
+                    .map_err(|e| format!("File write error: {e}"))?;
+                downloaded += n as u64;
+                let _ = tx.send(DownloadMsg::Progress(downloaded, total));
+            }
+
+            // Rename .part → final path
+            std::fs::rename(&part_path, &model_path)
+                .map_err(|e| format!("Failed to rename model file: {e}"))?;
+
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => {
+                let _ = tx.send(DownloadMsg::Done);
+            }
+            Err(e) => {
+                // Clean up partial file
+                let _ = std::fs::remove_file(&part_path);
+                let _ = tx.send(DownloadMsg::Error(e));
+            }
+        }
+    });
+
+    let runtime_c = Rc::clone(runtime);
+    let config_c = Arc::clone(config);
+    let action_c = action.clone();
+    let st = status.clone();
+    glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
+        // Drain all pending messages, keep the last one
+        let mut last_msg = None;
+        while let Ok(msg) = rx.try_recv() {
+            last_msg = Some(msg);
+        }
+
+        match last_msg {
+            Some(DownloadMsg::Progress(downloaded, total)) => {
+                let dl_mb = downloaded as f64 / (1024.0 * 1024.0);
+                if let Some(t) = total {
+                    let total_mb = t as f64 / (1024.0 * 1024.0);
+                    st.set_label(&format!("Downloading: {dl_mb:.0} / {total_mb:.0} MB"));
+                } else {
+                    st.set_label(&format!("Downloading: {dl_mb:.0} MB"));
+                }
+                glib::ControlFlow::Continue
+            }
+            Some(DownloadMsg::Done) => {
+                runtime_c.borrow_mut().downloading = false;
+                st.set_label("Loading model...");
+                // Now load the model
+                load_whisper_model(&runtime_c, &config_c, &action_c, &st);
+                glib::ControlFlow::Break
+            }
+            Some(DownloadMsg::Error(e)) => {
+                eprintln!("Model download failed: {e}");
+                {
+                    let mut rt = runtime_c.borrow_mut();
+                    rt.downloading = false;
+                    rt.active_service = TranscriptionService::Api;
+                }
+                action_c.set_state(&"api".to_variant());
+                st.set_label("Download failed");
+                let st2 = st.clone();
+                glib::timeout_add_local_once(std::time::Duration::from_secs(3), move || {
+                    st2.set_opacity(0.0);
+                });
+                glib::ControlFlow::Break
+            }
+            None => glib::ControlFlow::Continue,
+        }
+    });
+}
+
 
 fn save_window_position(win: &gtk4::ApplicationWindow, db: &Arc<Mutex<Db>>) {
     #[cfg(not(target_os = "linux"))]
@@ -444,14 +807,14 @@ fn save_window_position(win: &gtk4::ApplicationWindow, db: &Arc<Mutex<Db>>) {
         {
             let text = String::from_utf8_lossy(&output.stdout);
             for line in text.lines() {
-                if let Some(pos) = line.strip_prefix("  Position: ") {
-                    if let Some((xs, ys)) = pos.split_once(',') {
-                        let x = xs.trim();
-                        let y = ys.split_whitespace().next().unwrap_or("0");
-                        if let Ok(db) = db.lock() {
-                            let _ = db.set_setting("window_x", x);
-                            let _ = db.set_setting("window_y", y);
-                        }
+                if let Some(pos) = line.strip_prefix("  Position: ")
+                    && let Some((xs, ys)) = pos.split_once(',')
+                {
+                    let x = xs.trim();
+                    let y = ys.split_whitespace().next().unwrap_or("0");
+                    if let Ok(db) = db.lock() {
+                        let _ = db.set_setting("window_x", x);
+                        let _ = db.set_setting("window_y", y);
                     }
                 }
             }
@@ -522,30 +885,30 @@ fn show_history_dialog(_window: &gtk4::ApplicationWindow, db: &Arc<Mutex<Db>>) {
 
     let list_box = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
 
-    if let Ok(db) = db.lock() {
-        if let Ok(entries) = db.recent(20) {
-            if entries.is_empty() {
-                let empty = gtk4::Label::new(Some("No transcriptions yet."));
-                list_box.append(&empty);
-            } else {
-                for entry in entries {
-                    let row = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
-                    let time = gtk4::Label::new(Some(&entry.created_at));
-                    time.set_halign(gtk4::Align::Start);
-                    time.set_opacity(0.6);
+    if let Ok(db) = db.lock()
+        && let Ok(entries) = db.recent(20)
+    {
+        if entries.is_empty() {
+            let empty = gtk4::Label::new(Some("No transcriptions yet."));
+            list_box.append(&empty);
+        } else {
+            for entry in entries {
+                let row = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
+                let time = gtk4::Label::new(Some(&entry.created_at));
+                time.set_halign(gtk4::Align::Start);
+                time.set_opacity(0.6);
 
-                    let text = gtk4::Label::new(Some(&entry.text));
-                    text.set_halign(gtk4::Align::Start);
-                    text.set_wrap(true);
-                    text.set_selectable(true);
+                let text = gtk4::Label::new(Some(&entry.text));
+                text.set_halign(gtk4::Align::Start);
+                text.set_wrap(true);
+                text.set_selectable(true);
 
-                    row.append(&time);
-                    row.append(&text);
+                row.append(&time);
+                row.append(&text);
 
-                    let sep = gtk4::Separator::new(gtk4::Orientation::Horizontal);
-                    list_box.append(&row);
-                    list_box.append(&sep);
-                }
+                let sep = gtk4::Separator::new(gtk4::Orientation::Horizontal);
+                list_box.append(&row);
+                list_box.append(&sep);
             }
         }
     }
