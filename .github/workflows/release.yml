@@ -64,6 +64,12 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install gtk4 cmake
 
+      # whisper.cpp GGML tries i8mm intrinsics that the CI Clang rejects;
+      # target armv8.2-a (no +i8mm) to build a portable binary.
+      - name: Set GGML ARM arch (macOS)
+        if: runner.os == 'macOS'
+        run: echo "GGML_CPU_ARM_ARCH=armv8.2-a" >> "$GITHUB_ENV"
+
       # ── Windows ────────────────────────────────────────────
       - name: Set up Python (Windows)
         if: runner.os == 'Windows'
