@@ -105,6 +105,21 @@ const CSS: &str = r#"
     }
 "#;
 
+/// Show the status label (handles macOS visibility toggling)
+fn show_status(label: &gtk4::Label, text: &str) {
+    label.set_label(text);
+    label.set_opacity(1.0);
+    #[cfg(target_os = "macos")]
+    label.set_visible(true);
+}
+
+/// Hide the status label
+fn hide_status(label: &gtk4::Label) {
+    label.set_opacity(0.0);
+    #[cfg(target_os = "macos")]
+    label.set_visible(false);
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum State {
     Idle,
@@ -151,13 +166,21 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     vbox.set_valign(gtk4::Align::Center);
 
     // The mic button (no keyboard activation to prevent accidental recordings)
-    let loader = gtk4::gdk_pixbuf::PixbufLoader::with_type("svg").unwrap();
-    loader.write(MIC_SVG).unwrap();
-    loader.close().unwrap();
-    let pixbuf = loader.pixbuf().expect("failed to load mic icon");
-    let texture = gdk::Texture::for_pixbuf(&pixbuf);
-    let icon = gtk4::Image::from_paintable(Some(&texture));
+    // Try system icon first (works on Linux), fall back to SVG pixbuf
+    let icon = gtk4::Image::from_icon_name("audio-input-microphone-symbolic");
     icon.set_pixel_size(32);
+
+    // Check if icon resolved; if not, load bundled SVG
+    #[cfg(target_os = "macos")]
+    {
+        let loader = gtk4::gdk_pixbuf::PixbufLoader::with_type("svg").unwrap();
+        loader.write(MIC_SVG).unwrap();
+        loader.close().unwrap();
+        let pixbuf = loader.pixbuf().expect("failed to load mic icon");
+        let texture = gdk::Texture::for_pixbuf(&pixbuf);
+        icon.set_paintable(Some(&texture));
+    }
+
     let button = gtk4::Button::new();
     button.set_child(Some(&icon));
     button.add_css_class("mic-btn");
@@ -349,8 +372,7 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
             State::Idle => {
                 // Guard: block recording during model download
                 if runtime_c.borrow().downloading {
-                    st.set_label("Downloading model...");
-                    st.set_opacity(1.0);
+                    show_status(&st, "Downloading model...");
                     return;
                 }
 
@@ -358,8 +380,7 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
                 let rt = runtime_c.borrow();
                 if rt.active_service == TranscriptionService::Local && rt.local_whisper.is_none() {
                     drop(rt);
-                    st.set_label("No local model loaded");
-                    st.set_opacity(1.0);
+                    show_status(&st, "No local model loaded");
                     return;
                 }
 
@@ -370,44 +391,40 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
                         .unwrap_or(true); // custom defaults to needing a key check
                     if needs_key && rt.api_key.is_none() {
                         drop(rt);
-                        st.set_label("No API key set");
-                        st.set_opacity(1.0);
+                        show_status(&st, "No API key set");
                         return;
                     }
                 }
                 drop(rt);
 
                 if !Recorder::input_available() {
-                    st.set_label("No microphone found");
-                    st.set_opacity(1.0);
+                    show_status(&st, "No microphone found");
                     return;
                 }
 
                 if let Err(e) = rec_c.borrow_mut().start() {
                     eprintln!("Record start error: {e}");
-                    st.set_label(&format!("Err: {e}"));
-                    st.set_opacity(1.0);
+                    show_status(&st, &format!("Err: {e}"));
                     return;
                 }
                 *state_c.borrow_mut() = State::Recording;
                 btn.add_css_class("recording");
                 btn.remove_css_class("done");
 
-                st.set_label("Recording...");
-                st.set_opacity(1.0);
+                show_status(&st, "Recording...");
             }
             State::Recording => {
                 *state_c.borrow_mut() = State::Processing;
                 btn.remove_css_class("recording");
                 btn.add_css_class("processing");
 
-                st.set_label("Transcribing...");
+                show_status(&st, "Transcribing...");
 
                 let wav = match rec_c.borrow_mut().stop() {
                     Ok(w) => w,
                     Err(e) => {
                         eprintln!("Record stop error: {e}");
-                        st.set_label(&format!("Err: {e}"));
+                        show_status(&st, &format!("Err: {e}"));
                         *state_c.borrow_mut() = State::Idle;
                         btn.remove_css_class("processing");
                         return;
@@ -462,13 +479,13 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
                                     btn2.remove_css_class("processing");
                                     btn2.add_css_class("done");
 
-                                    st2.set_label("Copied!");
+                                    show_status(&st2, "Copied!");
                                     let st3 = st2.clone();
                                     let btn3 = btn2.clone();
                                     glib::timeout_add_local_once(
                                         std::time::Duration::from_secs(2),
                                         move || {
-                                            st3.set_opacity(0.0);
+                                            hide_status(&st3);
                                             btn3.remove_css_class("done");
                                         },
                                     );
@@ -477,11 +494,11 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
                                     eprintln!("Clipboard error: {e}");
                                     btn2.remove_css_class("processing");
 
-                                    st2.set_label("Error!");
+                                    show_status(&st2, "Error!");
                                     let st3 = st2.clone();
                                     glib::timeout_add_local_once(
                                         std::time::Duration::from_secs(3),
-                                        move || st3.set_opacity(0.0),
+                                        move || hide_status(&st3),
                                     );
                                 }
                             }
@@ -491,11 +508,11 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
                         Ok(Err(e)) => {
                             eprintln!("Transcription error: {e}");
                             btn2.remove_css_class("processing");
-                            st2.set_label("Error!");
+                            show_status(&st2, "Error!");
                             let st3 = st2.clone();
                             glib::timeout_add_local_once(
                                 std::time::Duration::from_secs(3),
-                                move || st3.set_opacity(0.0),
+                                move || hide_status(&st3),
                             );
                             *state_c2.borrow_mut() = State::Idle;
                             glib::ControlFlow::Break
@@ -854,11 +871,10 @@ fn apply_preset(
 
     action.set_state(&preset.id.to_variant());
 
-    status.set_label(&format!("{} mode", preset.label));
-    status.set_opacity(1.0);
+    show_status(status, &format!("{} mode", preset.label));
     let st = status.clone();
     glib::timeout_add_local_once(std::time::Duration::from_secs(2), move || {
-        st.set_opacity(0.0);
+        hide_status(&st);
     });
 }
 
@@ -1103,11 +1119,10 @@ fn show_custom_api_dialog(
 
         action_save.set_state(&"custom".to_variant());
 
-        status_save.set_label("Custom API mode");
-        status_save.set_opacity(1.0);
+        show_status(&status_save, "Custom API mode");
         let st = status_save.clone();
         glib::timeout_add_local_once(std::time::Duration::from_secs(2), move || {
-            st.set_opacity(0.0);
+            hide_status(&st);
         });
 
         dialog_save.close();
@@ -1169,8 +1184,7 @@ fn load_whisper_model(
     action: &gtk4::gio::SimpleAction,
     status: &gtk4::Label,
 ) {
-    status.set_label("Loading model...");
-    status.set_opacity(1.0);
+    show_status(status, "Loading model...");
 
     let model_path = model_path.to_path_buf();
     let (tx, rx) = std::sync::mpsc::channel::<Result<Arc<LocalWhisper>, String>>();
@@ -1187,10 +1201,10 @@ fn load_whisper_model(
         match rx.try_recv() {
             Ok(Ok(whisper)) => {
                 runtime_c.borrow_mut().local_whisper = Some(whisper);
-                st.set_label("Local mode ready");
+                show_status(&st, "Local mode ready");
                 let st2 = st.clone();
                 glib::timeout_add_local_once(std::time::Duration::from_secs(2), move || {
-                    st2.set_opacity(0.0);
+                    hide_status(&st2);
                 });
                 glib::ControlFlow::Break
             }
@@ -1205,10 +1219,10 @@ fn load_whisper_model(
                     rt.api_model = config::API_PRESETS[0].default_model.to_string();
                 }
                 action_c.set_state(&"groq".to_variant());
-                st.set_label("Model load failed");
+                show_status(&st, "Model load failed");
                 let st2 = st.clone();
                 glib::timeout_add_local_once(std::time::Duration::from_secs(3), move || {
-                    st2.set_opacity(0.0);
+                    hide_status(&st2);
                 });
                 glib::ControlFlow::Break
             }
@@ -1222,10 +1236,10 @@ fn load_whisper_model(
                     rt.api_model = config::API_PRESETS[0].default_model.to_string();
                 }
                 action_c.set_state(&"groq".to_variant());
-                st.set_label("Model load failed");
+                show_status(&st, "Model load failed");
                 let st2 = st.clone();
                 glib::timeout_add_local_once(std::time::Duration::from_secs(3), move || {
-                    st2.set_opacity(0.0);
+                    hide_status(&st2);
                 });
                 glib::ControlFlow::Break
             }
@@ -1249,8 +1263,7 @@ fn download_and_load_model(
 ) {
     runtime.borrow_mut().downloading = true;
 
-    status.set_label("Downloading model...");
-    status.set_opacity(1.0);
+    show_status(status, "Downloading model...");
 
     let url = url.to_string();
     let model_path = model_path.to_path_buf();
@@ -1326,15 +1339,15 @@ fn download_and_load_model(
                 let dl_mb = downloaded as f64 / (1024.0 * 1024.0);
                 if let Some(t) = total {
                     let total_mb = t as f64 / (1024.0 * 1024.0);
-                    st.set_label(&format!("Downloading: {dl_mb:.0} / {total_mb:.0} MB"));
+                    show_status(&st, &format!("Downloading: {dl_mb:.0} / {total_mb:.0} MB"));
                 } else {
-                    st.set_label(&format!("Downloading: {dl_mb:.0} MB"));
+                    show_status(&st, &format!("Downloading: {dl_mb:.0} MB"));
                 }
                 glib::ControlFlow::Continue
             }
             Some(DownloadMsg::Done) => {
                 runtime_c.borrow_mut().downloading = false;
-                st.set_label("Loading model...");
+                show_status(&st, "Loading model...");
                 // Now load the model
                 load_whisper_model(&runtime_c, &loaded_model_path, &action_c, &st);
                 glib::ControlFlow::Break
@@ -1350,10 +1363,10 @@ fn download_and_load_model(
                     rt.api_model = config::API_PRESETS[0].default_model.to_string();
                 }
                 action_c.set_state(&"groq".to_variant());
-                st.set_label("Download failed");
+                show_status(&st, "Download failed");
                 let st2 = st.clone();
                 glib::timeout_add_local_once(std::time::Duration::from_secs(3), move || {
-                    st2.set_opacity(0.0);
+                    hide_status(&st2);
                 });
                 glib::ControlFlow::Break
             }
