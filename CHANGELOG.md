@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.19 — 2026-03-07
+
+- **macOS status notifications** — "No microphone found", "No API key set", and all error/status messages now properly show on macOS (previously hidden due to layout fix)
+- Use system icon on Linux, bundled SVG on macOS for mic button
+
 ## v0.1.18 — 2026-03-07
 
 - **macOS glassmorphic UI** — dark semi-transparent background, branded label, hidden status placeholder for balanced layout
