@@ -14,6 +14,8 @@ Simple setup: download binary, launch, switch provider via D-Bus.
 
 ![WhisperCrabs button states](src/screenshots/ui-buttons.png)
 
+![WhisperCrabs on macOS](src/screenshots/macosx-floating-demo.png)
+
 ## Privacy
 
 WhisperCrabs has no account, no telemetry, and no background processes. Your microphone is **never accessed** until you explicitly click the record button. Audio is captured in-memory, never written to disk. Only the transcribed text is stored locally in SQLite on your machine.

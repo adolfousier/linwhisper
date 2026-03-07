@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.18 — 2026-03-07
+
+- **macOS glassmorphic UI** — dark semi-transparent background, branded label, hidden status placeholder for balanced layout
+- **Crisp mic icon** — SVG rasterized at 64px for sharp rendering at all display sizes
+- **Expanded test suite** — 31 tests covering API, audio encoding, config, database, and model downloads
+- Added macOS floating demo screenshot to README
+
 ## v0.1.17 — 2026-03-05
 
 - **Cross-platform mic icon** — replaced freedesktop icon theme with bundled SVG; mic button now renders correctly on macOS
