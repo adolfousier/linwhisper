@@ -32,10 +32,9 @@ const CSS: &str = r#"
         background-color: transparent;
     }
     window.main-window.macos-bg {
-        background-color: #111111;
+        background-color: rgba(17, 17, 17, 0.92);
     }
     .macos-bg .mic-btn {
-        margin-top: 8px;
         min-width: 68px;
         min-height: 68px;
     }
@@ -181,7 +180,8 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
         brand.set_justify(gtk4::Justification::Center);
         brand.add_css_class("brand-label");
         vbox.append(&brand);
-        window.set_default_size(96, 96);
+        window.set_default_size(96, 110);
+        status.set_visible(false);
     }
 
     vbox.append(&status);
