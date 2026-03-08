@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.1.21 — 2026-03-08
+
+- **Security hardening** — full audit and fixes across all modules:
+  - API URL validation: reject `file://`, `ftp://`, and other non-HTTP schemes; warn on unencrypted HTTP for remote hosts
+  - Request timeouts: 120s request timeout, 10s connect timeout on all API calls
+  - D-Bus input sanitization: typed JSON deserialization, size cap (4 KB), API keys redacted from logs
+  - Database setting key whitelist: only known keys accepted, values capped at 4 KB
+  - File permissions: data directory and model downloads set to `0o700`/`0o600` on Unix
+  - Replaced all `.unwrap()` with `.expect()` or proper error propagation
+  - D-Bus param extraction uses safe `Option` unwrapping instead of panic-on-None
+  - Local whisper model gracefully returns error if not loaded instead of panicking
+- **Security tests** — setting key rejection, `file://` URL rejection, `ftp://` URL rejection (34 total tests)
+
 ## v0.1.20 — 2026-03-08
 
 - **macOS error dialog** — errors ("No microphone found", "No API key set", etc.) now show as a native modal dialog on macOS instead of truncated inline text

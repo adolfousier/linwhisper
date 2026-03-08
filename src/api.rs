@@ -1,4 +1,5 @@
 use reqwest::multipart;
+use std::time::Duration;
 
 /// Send WAV audio to an OpenAI-compatible transcription endpoint and return the text.
 pub async fn transcribe(
@@ -7,6 +8,20 @@ pub async fn transcribe(
     model: &str,
     wav_data: Vec<u8>,
 ) -> Result<String, String> {
+    // Validate URL scheme — reject file://, ftp://, etc.
+    if !base_url.starts_with("http://") && !base_url.starts_with("https://") {
+        return Err("Invalid API URL: only http:// and https:// are allowed".into());
+    }
+
+    // Warn (in stderr) when using unencrypted HTTP for non-localhost
+    if base_url.starts_with("http://")
+        && !base_url.starts_with("http://localhost")
+        && !base_url.starts_with("http://127.0.0.1")
+        && !base_url.starts_with("http://[::1]")
+    {
+        eprintln!("WARNING: API endpoint uses unencrypted HTTP for a remote host");
+    }
+
     let url = format!("{}/audio/transcriptions", base_url.trim_end_matches('/'));
 
     let file_part = multipart::Part::bytes(wav_data)
@@ -19,7 +34,12 @@ pub async fn transcribe(
         .text("response_format", "json")
         .part("file", file_part);
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))?;
+
     let resp = client
         .post(&url)
         .bearer_auth(api_key)

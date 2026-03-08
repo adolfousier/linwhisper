@@ -39,13 +39,27 @@ fn recent_respects_limit() {
 fn settings_roundtrip() {
     let (db, _dir) = temp_db();
 
-    assert!(db.get_setting("foo").unwrap().is_none());
+    // Use a valid whitelisted key
+    assert!(db.get_setting("transcription_mode").unwrap().is_none());
 
-    db.set_setting("foo", "bar").unwrap();
-    assert_eq!(db.get_setting("foo").unwrap(), Some("bar".to_string()));
+    db.set_setting("transcription_mode", "local").unwrap();
+    assert_eq!(
+        db.get_setting("transcription_mode").unwrap(),
+        Some("local".to_string())
+    );
 
-    db.set_setting("foo", "baz").unwrap();
-    assert_eq!(db.get_setting("foo").unwrap(), Some("baz".to_string()));
+    db.set_setting("transcription_mode", "api").unwrap();
+    assert_eq!(
+        db.get_setting("transcription_mode").unwrap(),
+        Some("api".to_string())
+    );
+}
+
+#[test]
+fn settings_rejects_unknown_key() {
+    let (db, _dir) = temp_db();
+    let result = db.set_setting("unknown_key", "value");
+    assert!(result.is_err());
 }
 
 #[test]

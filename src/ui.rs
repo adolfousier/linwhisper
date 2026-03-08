@@ -169,7 +169,7 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     let provider = gtk4::CssProvider::new();
     provider.load_from_data(CSS);
     gtk4::style_context_add_provider_for_display(
-        &gdk::Display::default().unwrap(),
+        &gdk::Display::default().expect("no default display"),
         &provider,
         gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
@@ -200,9 +200,10 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     // Check if icon resolved; if not, load bundled SVG
     #[cfg(target_os = "macos")]
     {
-        let loader = gtk4::gdk_pixbuf::PixbufLoader::with_type("svg").unwrap();
-        loader.write(MIC_SVG).unwrap();
-        loader.close().unwrap();
+        let loader =
+            gtk4::gdk_pixbuf::PixbufLoader::with_type("svg").expect("SVG loader unavailable");
+        loader.write(MIC_SVG).expect("failed to write SVG data");
+        loader.close().expect("failed to finalize SVG loader");
         let pixbuf = loader.pixbuf().expect("failed to load mic icon");
         let texture = gdk::Texture::for_pixbuf(&pixbuf);
         icon.set_paintable(Some(&texture));
@@ -279,7 +280,7 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
                 config.api_model.clone(),
             ),
             Some("custom") => {
-                let d = db.lock().unwrap();
+                let d = db.lock().expect("db lock poisoned");
                 let url = d
                     .get_setting("api_custom_url")
                     .ok()
@@ -485,14 +486,18 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
                         let api_key = rt.api_key.clone().unwrap_or_default();
                         let model = rt.api_model.clone();
                         std::thread::spawn(move || {
-                            let rt = tokio::runtime::Runtime::new().unwrap();
+                            let rt = tokio::runtime::Runtime::new()
+                                .expect("failed to create tokio runtime");
                             let result = rt
                                 .block_on(crate::api::transcribe(&base_url, &api_key, &model, wav));
                             let _ = tx.send(result);
                         });
                     }
                     TranscriptionService::Local => {
-                        let whisper = rt.local_whisper.clone().unwrap();
+                        let Some(whisper) = rt.local_whisper.clone() else {
+                            let _ = tx.send(Err("Local model not loaded".into()));
+                            return;
+                        };
                         std::thread::spawn(move || {
                             let result = whisper.transcribe(&wav, sample_rate);
                             let _ = tx.send(result);
@@ -630,7 +635,10 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     let status_mode = status.clone();
     let win_mode = window.clone();
     mode_action.connect_activate(move |action, param| {
-        let chosen: String = param.unwrap().get::<String>().unwrap();
+        let Some(param) = param else { return };
+        let Some(chosen) = param.get::<String>() else {
+            return;
+        };
 
         // Guard: block mode switch during recording/processing
         if *state_mode.borrow() != State::Idle {
@@ -783,10 +791,28 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     let config_api_cfg = Arc::clone(&config);
     let mode_action_ref = mode_action.clone();
     api_config_action.connect_activate(move |_, param| {
-        let json_str: String = param.unwrap().get::<String>().unwrap();
-        eprintln!("[dbus] 'set-api-config' action activated: {json_str}");
+        let Some(param) = param else { return };
+        let Some(json_str) = param.get::<String>() else {
+            eprintln!("set-api-config: expected string parameter");
+            return;
+        };
 
-        let parsed: serde_json::Value = match serde_json::from_str(&json_str) {
+        // Cap incoming JSON size to prevent abuse
+        if json_str.len() > 4096 {
+            eprintln!("set-api-config: JSON too large");
+            return;
+        }
+
+        eprintln!("[dbus] 'set-api-config' action activated");
+
+        #[derive(serde::Deserialize)]
+        struct ApiConfigInput {
+            base_url: String,
+            model: String,
+            api_key: Option<String>,
+        }
+
+        let input: ApiConfigInput = match serde_json::from_str(&json_str) {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("set-api-config: invalid JSON: {e}");
@@ -794,21 +820,15 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
             }
         };
 
-        let base_url = match parsed["base_url"].as_str() {
-            Some(u) => u.to_string(),
-            None => {
-                eprintln!("set-api-config: missing 'base_url'");
-                return;
-            }
-        };
-        let model = match parsed["model"].as_str() {
-            Some(m) => m.to_string(),
-            None => {
-                eprintln!("set-api-config: missing 'model'");
-                return;
-            }
-        };
-        let api_key = parsed["api_key"].as_str().map(|s| s.to_string());
+        // Validate URL scheme
+        if !input.base_url.starts_with("http://") && !input.base_url.starts_with("https://") {
+            eprintln!("set-api-config: base_url must use http:// or https://");
+            return;
+        }
+
+        let base_url = input.base_url;
+        let model = input.model;
+        let api_key = input.api_key;
 
         // Persist to DB
         if let Ok(d) = db_api_cfg.lock() {
@@ -1328,8 +1348,24 @@ fn download_and_load_model(
             let total = resp.content_length();
             let mut downloaded: u64 = 0;
 
-            let mut file = std::fs::File::create(&part_path)
-                .map_err(|e| format!("Failed to create file: {e}"))?;
+            let mut file = {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .create(true)
+                        .truncate(true)
+                        .mode(0o600)
+                        .open(&part_path)
+                        .map_err(|e| format!("Failed to create file: {e}"))?
+                }
+                #[cfg(not(unix))]
+                {
+                    std::fs::File::create(&part_path)
+                        .map_err(|e| format!("Failed to create file: {e}"))?
+                }
+            };
 
             use std::io::{Read, Write};
             let mut reader = resp;

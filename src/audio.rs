@@ -44,7 +44,10 @@ impl Recorder {
             .map_err(|e| format!("No input config: {e}"))?;
 
         let samples = Arc::clone(&self.samples);
-        samples.lock().unwrap().clear();
+        samples
+            .lock()
+            .expect("audio sample buffer poisoned")
+            .clear();
 
         let err_fn = |err| eprintln!("Audio stream error: {err}");
 
@@ -55,7 +58,10 @@ impl Recorder {
                     .build_input_stream(
                         &config.into(),
                         move |data: &[f32], _: &_| {
-                            samples.lock().unwrap().extend_from_slice(data);
+                            samples
+                                .lock()
+                                .expect("audio sample buffer poisoned")
+                                .extend_from_slice(data);
                         },
                         err_fn,
                         None,
@@ -70,7 +76,10 @@ impl Recorder {
                         move |data: &[i16], _: &_| {
                             let floats: Vec<f32> =
                                 data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
-                            samples.lock().unwrap().extend_from_slice(&floats);
+                            samples
+                                .lock()
+                                .expect("audio sample buffer poisoned")
+                                .extend_from_slice(&floats);
                         },
                         err_fn,
                         None,
@@ -87,7 +96,10 @@ impl Recorder {
                                 .iter()
                                 .map(|&s| (s as f32 / u16::MAX as f32) * 2.0 - 1.0)
                                 .collect();
-                            samples.lock().unwrap().extend_from_slice(&floats);
+                            samples
+                                .lock()
+                                .expect("audio sample buffer poisoned")
+                                .extend_from_slice(&floats);
                         },
                         err_fn,
                         None,
@@ -106,7 +118,10 @@ impl Recorder {
         // Drop the stream to stop recording
         self.stream.take();
 
-        let samples = self.samples.lock().unwrap();
+        let samples = self
+            .samples
+            .lock()
+            .map_err(|_| "Audio buffer lock poisoned".to_string())?;
         if samples.is_empty() {
             return Err("No audio recorded".into());
         }

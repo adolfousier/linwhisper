@@ -149,6 +149,14 @@ impl Config {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("whispercrabs");
         std::fs::create_dir_all(&data_dir).ok();
+
+        // Restrict directory permissions on Unix (owner-only: rwx------)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o700));
+        }
+
         let db_path = data_dir.join("history.db");
 
         let models_dir = data_dir.join("models");

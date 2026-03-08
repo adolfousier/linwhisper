@@ -33,3 +33,17 @@ async fn transcribe_rejects_empty_wav() {
     let result = api::transcribe("http://127.0.0.1:1", "key", "model", vec![]).await;
     assert!(result.is_err());
 }
+
+#[tokio::test]
+async fn transcribe_rejects_file_url() {
+    let result = api::transcribe("file:///etc/passwd", "key", "model", vec![1]).await;
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("only http:// and https://"));
+}
+
+#[tokio::test]
+async fn transcribe_rejects_ftp_url() {
+    let result = api::transcribe("ftp://evil.com", "key", "model", vec![1]).await;
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("only http:// and https://"));
+}

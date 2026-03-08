@@ -1,6 +1,18 @@
 use rusqlite::{Connection, Result, params};
 use std::path::Path;
 
+/// Allowed setting keys (prevents arbitrary key/value injection).
+/// Allowed setting key prefixes (prevents arbitrary key/value injection).
+const VALID_SETTING_PREFIXES: &[&str] = &[
+    "transcription_mode",
+    "window_x",
+    "window_y",
+    "api_custom_url",
+    "api_custom_key",
+    "api_custom_model",
+    "api_key_",
+];
+
 /// SQLite database for transcription history and settings.
 pub struct Db {
     conn: Connection,
@@ -50,6 +62,17 @@ impl Db {
     }
 
     pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        // Validate key against whitelist
+        if !VALID_SETTING_PREFIXES
+            .iter()
+            .any(|p| key == *p || key.starts_with(p))
+        {
+            return Err(rusqlite::Error::InvalidParameterName(format!(
+                "unknown setting key: {key}"
+            )));
+        }
+        // Cap value length to prevent abuse
+        let value = &value[..value.len().min(4096)];
         self.conn.execute(
             "INSERT INTO settings (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
