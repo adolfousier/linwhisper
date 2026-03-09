@@ -1,10 +1,10 @@
 # WhisperCrabs
 
-Floating voice-to-text tool for Linux, macOS, and Windows. 
+Floating voice-to-text and text-to-speech tool for Linux, macOS, and Windows.
 
-Click to record, click to transcribe, text copied to clipboard. Setup customized commands to hit record and stop. Play sound when transcription ready. 
+Click to record, click to transcribe, text copied to clipboard. Copy any text and click to hear it read aloud. Setup customized commands to hit record and stop. Play sound when transcription ready.
 
-Supports fully local transcription via whisper.cpp or any OpenAI-compatible API endpoint (Groq, Ollama, OpenRouter, LM Studio, LocalAI, etc.).
+**Local-first** — runs entirely on your machine with whisper.cpp for speech-to-text and Piper for text-to-speech. No cloud required. Also supports any OpenAI-compatible API endpoint (Groq, Ollama, OpenRouter, LM Studio, LocalAI, etc.).
 
 **AI Agent-Ready** — fully controllable via D-Bus. 
 
@@ -26,12 +26,12 @@ With **local mode** (`PRIMARY_TRANSCRIPTION_SERVICE=local`), everything stays on
 
 - Floating microphone button (draggable, position persists)
 - One-click voice recording with visual feedback (red idle, green recording, orange transcribing)
-- **One-click provider switching** via right-click menu — Groq, Ollama, OpenRouter, LM Studio, Custom API, or Local
-- **Multiple local model sizes** — Tiny, Base, Small, Medium (auto-download, auto-cleanup on switch)
+- **STT — Local**: whisper.cpp transcription, no internet required (Tiny, Base, Small, Medium models)
+- **STT — API**: any OpenAI-compatible endpoint (Groq, Ollama, OpenRouter, LM Studio, Custom)
+- **TTS — Local**: optional text-to-speech via Piper, 6 built-in voices (US/UK, male/female)
+- One-click switching via right-click menu for both STT and TTS
 - **Custom API dialog** — connect to any OpenAI-compatible endpoint with Base URL, API Key, and Model
 - Global keyboard shortcuts via D-Bus (works on GNOME, KDE, Sway, etc.)
-- Local transcription via whisper.cpp (no internet required)
-- API transcription via any OpenAI-compatible endpoint
 - Transcribed text copied to clipboard automatically
 - Provider and model choice persists across restarts (saved to DB)
 - SQLite history with right-click access
@@ -41,11 +41,11 @@ With **local mode** (`PRIMARY_TRANSCRIPTION_SERVICE=local`), everything stays on
 
 ### Right-Click Menu
 
-Right-click the button to switch transcription provider or local model size:
+Right-click the button to switch STT provider/model or TTS voice:
 
 ![Right-click menu](src/screenshots/right-click-menu.png)
 
-### Provider Presets
+### STT API Presets
 
 | Provider | Base URL | Default Model | API Key |
 |----------|----------|---------------|---------|
@@ -93,6 +93,7 @@ echo 'API_KEY=your-api-key-here' > .env
 
 - **GTK 4** runtime libraries (pre-installed on GNOME desktops; bundled in Windows release ZIP; `brew install gtk4` on macOS)
 - Working microphone
+- **Python 3** (only if using TTS — auto-creates a venv with `piper-tts`)
 
 > **AI Agent note**: WhisperCrabs is fully controllable via D-Bus from the command line. An AI agent can set up WhisperCrabs for a user by: (1) downloading the binary from a GitHub release, (2) writing a `.env` with the user's API key, (3) launching the binary, and (4) switching transcription mode via D-Bus — no build step required. See the [D-Bus Control](#d-bus-control) section for all available commands.
 
@@ -171,8 +172,9 @@ Models are downloaded from [HuggingFace (ggerganov/whisper.cpp)](https://hugging
 |---|---|
 | **Left-click** | Start recording (button turns green with pulse) |
 | **Left-click again** | Stop recording, transcribe, copy to clipboard |
+| **Left-click while speaking** | Stop TTS playback |
 | **Esc** (when focused) | Stop recording |
-| **Right-click** | Popover menu: switch provider (Groq/Ollama/OpenRouter/LM Studio/Custom/Local), History, Quit |
+| **Right-click** | Popover menu: STT provider (API/Local), TTS voice, Read Clipboard, History, Quit |
 | **Drag** | Move the button anywhere on screen |
 
 After transcription completes, the text is copied to your clipboard. Paste with **Ctrl+V** wherever you need it.
@@ -186,6 +188,28 @@ SOUND_NOTIFICATION_ON_COMPLETION=true
 ```
 
 This is especially useful with local models that may take a few seconds to transcribe. You can keep working in another window, hear the notification when it's done, and just Ctrl+V to paste.
+
+### Text-to-Speech (Optional)
+
+WhisperCrabs includes optional text-to-speech powered by [Piper](https://github.com/rhasspy/piper). Select any text on your machine, copy it to the clipboard, then right-click the button and choose **Read Clipboard** to hear it spoken aloud.
+
+- TTS is **completely optional** — no setup required unless you want it
+- First use automatically installs a Python venv with `piper-tts` and downloads the selected voice model (~63 MB)
+- Button turns **yellow** while synthesizing, **green** while speaking — click to stop playback
+- Strips terminal formatting and markdown decoration before speaking
+
+#### Available Voices
+
+| Voice | Locale | Gender |
+|-------|--------|--------|
+| Amy | US English | Female |
+| Lessac | US English | Female |
+| Ryan | US English | Male |
+| Kristin | US English | Female |
+| Joe | US English | Male |
+| Cori | UK English | Female |
+
+Switch voices from the right-click menu under **TTS Voices**. Use **Reset TTS** to re-download in case of errors, or **Delete TTS** to remove all TTS data.
 
 ## D-Bus Control
 
@@ -225,6 +249,17 @@ gdbus call --session --dest=dev.whispercrabs.app --object-path=/dev/whispercrabs
 gdbus call --session --dest=dev.whispercrabs.app --object-path=/dev/whispercrabs/app --method=org.gtk.Actions.Activate transcription-mode "[<'local-tiny'>]" {}
 gdbus call --session --dest=dev.whispercrabs.app --object-path=/dev/whispercrabs/app --method=org.gtk.Actions.Activate transcription-mode "[<'local-small'>]" {}
 gdbus call --session --dest=dev.whispercrabs.app --object-path=/dev/whispercrabs/app --method=org.gtk.Actions.Activate transcription-mode "[<'local-medium'>]" {}
+```
+
+**Read clipboard aloud** (TTS — auto-downloads voice on first use):
+```bash
+gdbus call --session --dest=dev.whispercrabs.app --object-path=/dev/whispercrabs/app --method=org.gtk.Actions.Activate speak [] {}
+```
+
+**Switch TTS voice**:
+```bash
+# Available voices: amy, lessac, ryan, kristin, joe, cori
+gdbus call --session --dest=dev.whispercrabs.app --object-path=/dev/whispercrabs/app --method=org.gtk.Actions.Activate tts-mode "[<'ryan'>]" {}
 ```
 
 **Set custom API endpoint** (programmatic, no dialog):
@@ -308,9 +343,11 @@ API_MODEL=whisper-1
 | Component | Crate/Tool |
 |-----------|-----------|
 | GUI | gtk4-rs (GTK 4) |
-| Audio | cpal + hound |
+| Audio capture | cpal + hound |
+| Audio playback | rodio |
 | Local STT | whisper-rs (whisper.cpp) + rubato |
 | API STT | reqwest + OpenAI-compatible API |
+| TTS | piper-tts (Python, optional) |
 | Database | rusqlite (bundled SQLite) |
 | Clipboard | arboard |
 | Config | dotenvy |

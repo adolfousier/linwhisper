@@ -642,22 +642,22 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
         &initial_provider.to_variant(),
     );
 
-    let providers_section = gtk4::gio::Menu::new();
+    let stt_api_section = gtk4::gio::Menu::new();
     for preset in config::API_PRESETS {
-        providers_section.append(
+        stt_api_section.append(
             Some(preset.label),
             Some(&format!("app.transcription-mode::{}", preset.id)),
         );
     }
-    providers_section.append(
+    stt_api_section.append(
         Some("Custom API..."),
         Some("app.transcription-mode::custom"),
     );
 
-    let local_section = gtk4::gio::Menu::new();
+    let stt_local_section = gtk4::gio::Menu::new();
     for lm in config::LOCAL_MODEL_PRESETS {
-        local_section.append(
-            Some(&format!("Local — {} ({})", lm.label, lm.size_label)),
+        stt_local_section.append(
+            Some(&format!("{} ({})", lm.label, lm.size_label)),
             Some(&format!("app.transcription-mode::{}", lm.id)),
         );
     }
@@ -695,9 +695,9 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     actions_section.append(Some("Quit"), Some("app.quit"));
 
     let menu = gtk4::gio::Menu::new();
-    menu.append_section(Some("Transcription"), &providers_section);
-    menu.append_section(None, &local_section);
-    menu.append_section(Some("Text-to-Speech"), &tts_section);
+    menu.append_section(Some("STT — API"), &stt_api_section);
+    menu.append_section(Some("STT — Local"), &stt_local_section);
+    menu.append_section(Some("TTS — Voices"), &tts_section);
     menu.append_section(None, &tts_manage);
     menu.append_section(None, &actions_section);
 
@@ -2033,6 +2033,7 @@ fn play_tts_audio<F: FnOnce() + 'static>(
 
 /// Download Piper TTS (venv + voice model) with a dialog + progress bar.
 /// If `skip_venv` is true, only downloads the voice model files.
+#[allow(clippy::too_many_arguments)]
 fn download_tts_models(
     runtime: &Rc<RefCell<RuntimeState>>,
     models_dir: &std::path::Path,

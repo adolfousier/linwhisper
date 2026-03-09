@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.1.22 — 2026-03-09
+
+- **Text-to-speech via Piper** — optional local TTS powered by [Piper](https://github.com/rhasspy/piper) (Python venv, auto-installed on first use)
+- **6 built-in TTS voices** — Amy, Lessac, Ryan, Kristin, Joe (US English), Cori (UK English), switchable from the right-click menu
+- **Read Clipboard** — select any text, copy it, click "Read Clipboard" to hear it spoken aloud
+- **TTS button states** — yellow while synthesizing, green while speaking; click to stop playback
+- **TTS management** — Reset TTS (re-download on errors) and Delete TTS (remove all TTS data) in the right-click menu
+- **Smart text cleaning** — strips terminal formatting, markdown decoration, and collapsed whitespace before speech
+- **Right-click menu reorganized** — clear STT/TTS separation: "STT — API", "STT — Local", "TTS — Voices"
+- **README updated** — local-first messaging, TTS documentation, voices table, D-Bus TTS commands
+- **`cargo publish` in CI** — crates.io publish step added before building release artifacts
+
 ## v0.1.21 — 2026-03-08
 
 - **Security hardening** — full audit and fixes across all modules:
