@@ -114,25 +114,92 @@ pub enum TtsProvider {
     Piper,
 }
 
-/// Voice model files to download for Piper TTS.
-/// Default voice: en_US-amy-medium (natural US English female).
-pub const PIPER_VOICE_FILES: &[(&str, &str)] = &[
-    (
-        "voice.onnx",
-        "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx",
-    ),
-    (
-        "voice.onnx.json",
-        "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json",
-    ),
+/// A Piper voice preset.
+pub struct PiperVoice {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub locale: &'static str,
+    pub name: &'static str,
+    pub quality: &'static str,
+}
+
+impl PiperVoice {
+    /// HuggingFace URL for the ONNX model file.
+    pub fn onnx_url(&self) -> String {
+        format!(
+            "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/{}/{}/{}/{}-{}-{}.onnx",
+            self.locale, self.name, self.quality, self.locale, self.name, self.quality
+        )
+    }
+    /// HuggingFace URL for the ONNX config file.
+    pub fn config_url(&self) -> String {
+        format!("{}.json", self.onnx_url())
+    }
+}
+
+/// Available Piper voice presets.
+pub const PIPER_VOICES: &[PiperVoice] = &[
+    PiperVoice {
+        id: "amy",
+        label: "Amy (US Female)",
+        locale: "en_US",
+        name: "amy",
+        quality: "medium",
+    },
+    PiperVoice {
+        id: "lessac",
+        label: "Lessac (US Female)",
+        locale: "en_US",
+        name: "lessac",
+        quality: "medium",
+    },
+    PiperVoice {
+        id: "ryan",
+        label: "Ryan (US Male)",
+        locale: "en_US",
+        name: "ryan",
+        quality: "medium",
+    },
+    PiperVoice {
+        id: "kristin",
+        label: "Kristin (US Female)",
+        locale: "en_US",
+        name: "kristin",
+        quality: "medium",
+    },
+    PiperVoice {
+        id: "joe",
+        label: "Joe (US Male)",
+        locale: "en_US",
+        name: "joe",
+        quality: "medium",
+    },
+    PiperVoice {
+        id: "cori",
+        label: "Cori (UK Female)",
+        locale: "en_GB",
+        name: "cori",
+        quality: "medium",
+    },
 ];
 
-/// Check if Piper is fully set up (venv + voice model).
-pub fn piper_models_exist(piper_dir: &std::path::Path) -> bool {
+/// Default voice ID.
+pub const DEFAULT_PIPER_VOICE: &str = "amy";
+
+/// Look up a Piper voice preset by ID.
+pub fn find_piper_voice(id: &str) -> Option<&'static PiperVoice> {
+    PIPER_VOICES.iter().find(|v| v.id == id)
+}
+
+/// Check if Piper venv is installed.
+pub fn piper_venv_exists(piper_dir: &std::path::Path) -> bool {
     piper_dir.join("venv/bin/piper").exists()
-        && PIPER_VOICE_FILES
-            .iter()
-            .all(|(rel, _)| piper_dir.join(rel).exists())
+}
+
+/// Check if a specific voice model is downloaded.
+pub fn piper_voice_exists(piper_dir: &std::path::Path, voice_id: &str) -> bool {
+    piper_dir.join(format!("{voice_id}.onnx")).exists()
+        && piper_dir.join(format!("{voice_id}.onnx.json")).exists()
 }
 
 /// Application configuration loaded from environment and `.env` file.

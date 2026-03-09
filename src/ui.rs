@@ -84,6 +84,19 @@ const CSS: &str = r#"
         background-color: #16a34a;
         box-shadow: none;
     }
+    .mic-btn.synthesizing,
+    .mic-btn.synthesizing:hover {
+        background-image: none;
+        background-color: #d97706;
+        box-shadow: none;
+    }
+    .mic-btn.speaking,
+    .mic-btn.speaking:hover {
+        background-image: none;
+        background-color: #16a34a;
+        box-shadow: none;
+        animation: pulse 1s ease-in-out infinite;
+    }
     @keyframes pulse {
         0%   { opacity: 1.0; }
         50%  { opacity: 0.7; }
@@ -149,6 +162,8 @@ enum State {
     Idle,
     Recording,
     Processing,
+    Synthesizing,
+    Speaking,
 }
 
 struct RuntimeState {
@@ -160,8 +175,10 @@ struct RuntimeState {
     local_whisper: Option<Arc<LocalWhisper>>,
     downloading: bool,
     tts_provider: TtsProvider,
+    tts_voice: String,
     tts_engine: Option<Arc<PiperTts>>,
     tts_downloading: bool,
+    tts_stop: Arc<std::sync::atomic::AtomicBool>,
 }
 
 pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
@@ -387,13 +404,21 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
 
     // Load TTS state from DB
     let piper_dir = config.models_dir.join("piper");
+    let initial_tts_voice = db
+        .lock()
+        .ok()
+        .and_then(|d| d.get_setting("tts_voice").ok().flatten())
+        .unwrap_or_else(|| config::DEFAULT_PIPER_VOICE.to_string());
     let (initial_tts_provider, initial_tts_engine) = {
         let tts_setting = db
             .lock()
             .ok()
             .and_then(|d| d.get_setting("tts_provider").ok().flatten());
-        if tts_setting.as_deref() == Some("piper") && config::piper_models_exist(&piper_dir) {
-            match PiperTts::new(&piper_dir) {
+        if tts_setting.as_deref() == Some("piper")
+            && config::piper_venv_exists(&piper_dir)
+            && config::piper_voice_exists(&piper_dir, &initial_tts_voice)
+        {
+            match PiperTts::new(&piper_dir, &initial_tts_voice) {
                 Ok(engine) => (TtsProvider::Piper, Some(Arc::new(engine))),
                 Err(e) => {
                     eprintln!("Failed to load Piper TTS: {e}");
@@ -415,8 +440,10 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
         local_whisper: initial_whisper,
         downloading: false,
         tts_provider: initial_tts_provider,
+        tts_voice: initial_tts_voice,
         tts_engine: initial_tts_engine,
         tts_downloading: false,
+        tts_stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     }));
 
     // Shared state
@@ -596,7 +623,15 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
                     }
                 });
             }
-            State::Processing => {}
+            State::Processing | State::Synthesizing => {}
+            State::Speaking => {
+                // Stop TTS playback — completion callback will reset to Idle
+                dbg_log!("[TTS] stop requested via button click");
+                runtime_c
+                    .borrow()
+                    .tts_stop
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
         }
     });
 
@@ -627,11 +662,11 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
         );
     }
 
-    // TTS section
+    // TTS section — voice selection
     let tts_initial = if initial_tts_provider == TtsProvider::Piper {
-        "piper"
+        runtime.borrow().tts_voice.clone()
     } else {
-        "none"
+        "none".to_string()
     };
     let tts_mode_action = gtk4::gio::SimpleAction::new_stateful(
         "tts-mode",
@@ -642,8 +677,17 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     read_clipboard_action.set_enabled(initial_tts_provider != TtsProvider::None);
 
     let tts_section = gtk4::gio::Menu::new();
-    tts_section.append(Some("None"), Some("app.tts-mode::none"));
-    tts_section.append(Some("Piper English (~65 MB)"), Some("app.tts-mode::piper"));
+    tts_section.append(Some("Off"), Some("app.tts-mode::none"));
+    for voice in config::PIPER_VOICES {
+        tts_section.append(
+            Some(voice.label),
+            Some(&format!("app.tts-mode::{}", voice.id)),
+        );
+    }
+
+    let tts_manage = gtk4::gio::Menu::new();
+    tts_manage.append(Some("Reset TTS"), Some("app.tts-reset"));
+    tts_manage.append(Some("Delete TTS"), Some("app.tts-delete"));
 
     let actions_section = gtk4::gio::Menu::new();
     actions_section.append(Some("Read Clipboard"), Some("app.read-clipboard"));
@@ -654,6 +698,7 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     menu.append_section(Some("Transcription"), &providers_section);
     menu.append_section(None, &local_section);
     menu.append_section(Some("Text-to-Speech"), &tts_section);
+    menu.append_section(None, &tts_manage);
     menu.append_section(None, &actions_section);
 
     let popover = gtk4::PopoverMenu::from_model(Some(&menu));
@@ -901,7 +946,7 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     });
     app.add_action(&api_config_action);
 
-    // --- TTS mode action ---
+    // --- TTS mode action (voice selection) ---
     let runtime_tts = Rc::clone(&runtime);
     let db_tts = Arc::clone(&db);
     let config_tts = Arc::clone(&config);
@@ -924,66 +969,137 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
             return;
         }
 
-        match chosen.as_str() {
-            "none" => {
-                {
+        if chosen == "none" {
+            {
+                let mut rt = runtime_tts.borrow_mut();
+                rt.tts_provider = TtsProvider::None;
+                rt.tts_engine = None;
+            }
+            if let Ok(d) = db_tts.lock() {
+                let _ = d.set_setting("tts_provider", "none");
+            }
+            read_cb_action_ref.set_enabled(false);
+            action.set_state(&"none".to_variant());
+            return;
+        }
+
+        // Any other value is a voice ID
+        let Some(voice) = config::find_piper_voice(&chosen) else {
+            dbg_log!("[TTS] unknown voice: {chosen}");
+            return;
+        };
+
+        let piper_dir = config_tts.models_dir.join("piper");
+        let has_venv = config::piper_venv_exists(&piper_dir);
+        let has_voice = config::piper_voice_exists(&piper_dir, voice.id);
+
+        if has_venv && has_voice {
+            // Already downloaded — just load
+            dbg_log!("[TTS] loading voice {}...", voice.id);
+            show_status(&status_tts, "Loading TTS...");
+            match PiperTts::new(&piper_dir, voice.id) {
+                Ok(engine) => {
                     let mut rt = runtime_tts.borrow_mut();
-                    rt.tts_provider = TtsProvider::None;
-                    rt.tts_engine = None;
+                    rt.tts_provider = TtsProvider::Piper;
+                    rt.tts_voice = voice.id.to_string();
+                    rt.tts_engine = Some(Arc::new(engine));
                 }
-                if let Ok(d) = db_tts.lock() {
-                    let _ = d.set_setting("tts_provider", "none");
-                }
-                read_cb_action_ref.set_enabled(false);
-                action.set_state(&"none".to_variant());
-            }
-            "piper" => {
-                let sdir = config_tts.models_dir.join("piper");
-                dbg_log!("[TTS] piper dir: {}", sdir.display());
-                dbg_log!("[TTS] models exist: {}", config::piper_models_exist(&sdir));
-                if config::piper_models_exist(&sdir) {
-                    // Already downloaded — load
-                    dbg_log!("[TTS] loading existing models...");
-                    show_status(&status_tts, "Loading TTS...");
-                    match PiperTts::new(&sdir) {
-                        Ok(engine) => {
-                            let mut rt = runtime_tts.borrow_mut();
-                            rt.tts_provider = TtsProvider::Piper;
-                            rt.tts_engine = Some(Arc::new(engine));
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to load Piper: {e}");
-                            show_status(&status_tts, "TTS load failed");
-                        }
-                    }
-                    hide_status(&status_tts);
-                    if let Ok(d) = db_tts.lock() {
-                        let _ = d.set_setting("tts_provider", "piper");
-                    }
-                    read_cb_action_ref.set_enabled(true);
-                    action.set_state(&"piper".to_variant());
-                } else {
-                    // Download first
-                    dbg_log!("[TTS] models not found, starting download...");
-                    download_tts_models(
-                        &runtime_tts,
-                        &config_tts.models_dir,
-                        &db_tts,
-                        action,
-                        &read_cb_action_ref,
-                        &status_tts,
-                        &window_tts,
-                    );
+                Err(e) => {
+                    eprintln!("Failed to load Piper: {e}");
+                    show_status(&status_tts, "TTS load failed");
                 }
             }
-            _ => {}
+            hide_status(&status_tts);
+            if let Ok(d) = db_tts.lock() {
+                let _ = d.set_setting("tts_provider", "piper");
+                let _ = d.set_setting("tts_voice", voice.id);
+            }
+            read_cb_action_ref.set_enabled(true);
+            action.set_state(&chosen.to_variant());
+        } else {
+            // Need to download (venv and/or voice model)
+            dbg_log!("[TTS] downloading voice {}...", voice.id);
+            download_tts_models(
+                &runtime_tts,
+                &config_tts.models_dir,
+                &db_tts,
+                action,
+                &read_cb_action_ref,
+                &status_tts,
+                &window_tts,
+                voice,
+                has_venv,
+            );
         }
     });
     app.add_action(&tts_mode_action);
 
+    // --- TTS Reset action ---
+    let runtime_reset = Rc::clone(&runtime);
+    let config_reset = Arc::clone(&config);
+    let db_reset = Arc::clone(&db);
+    let status_reset = status.clone();
+    let tts_action_reset = tts_mode_action.clone();
+    let read_cb_reset = read_clipboard_action.clone();
+    let reset_action = gtk4::gio::SimpleAction::new("tts-reset", None);
+    reset_action.connect_activate(move |_, _| {
+        dbg_log!("[TTS] reset requested");
+        let piper_dir = config_reset.models_dir.join("piper");
+        if piper_dir.exists() {
+            let _ = std::fs::remove_dir_all(&piper_dir);
+            dbg_log!("[TTS] deleted {}", piper_dir.display());
+        }
+        {
+            let mut rt = runtime_reset.borrow_mut();
+            rt.tts_provider = TtsProvider::None;
+            rt.tts_engine = None;
+        }
+        if let Ok(d) = db_reset.lock() {
+            let _ = d.set_setting("tts_provider", "none");
+        }
+        read_cb_reset.set_enabled(false);
+        tts_action_reset.set_state(&"none".to_variant());
+        show_status(&status_reset, "TTS reset");
+        let st = status_reset.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_secs(2), move || hide_status(&st));
+    });
+    app.add_action(&reset_action);
+
+    // --- TTS Delete action ---
+    let runtime_del = Rc::clone(&runtime);
+    let config_del = Arc::clone(&config);
+    let db_del = Arc::clone(&db);
+    let status_del = status.clone();
+    let tts_action_del = tts_mode_action.clone();
+    let read_cb_del = read_clipboard_action.clone();
+    let delete_action = gtk4::gio::SimpleAction::new("tts-delete", None);
+    delete_action.connect_activate(move |_, _| {
+        dbg_log!("[TTS] delete requested");
+        let piper_dir = config_del.models_dir.join("piper");
+        if piper_dir.exists() {
+            let _ = std::fs::remove_dir_all(&piper_dir);
+            dbg_log!("[TTS] deleted {}", piper_dir.display());
+        }
+        {
+            let mut rt = runtime_del.borrow_mut();
+            rt.tts_provider = TtsProvider::None;
+            rt.tts_engine = None;
+        }
+        if let Ok(d) = db_del.lock() {
+            let _ = d.set_setting("tts_provider", "none");
+        }
+        read_cb_del.set_enabled(false);
+        tts_action_del.set_state(&"none".to_variant());
+        show_status(&status_del, "TTS deleted");
+        let st = status_del.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_secs(2), move || hide_status(&st));
+    });
+    app.add_action(&delete_action);
+
     // --- Read Clipboard action (TTS playback) ---
     let runtime_rc = Rc::clone(&runtime);
-    let status_rc = status.clone();
+    let state_tts_rc = Rc::clone(&state);
+    let btn_tts = button.clone();
     read_clipboard_action.connect_activate(move |_, _| {
         dbg_log!("[TTS] read-clipboard activated");
         let rt = runtime_rc.borrow();
@@ -1003,11 +1119,6 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
             }
             Ok(_) => {
                 dbg_log!("[TTS] clipboard empty or whitespace");
-                show_status(&status_rc, "Clipboard empty");
-                let st = status_rc.clone();
-                glib::timeout_add_local_once(std::time::Duration::from_secs(2), move || {
-                    hide_status(&st);
-                });
                 return;
             }
             Err(e) => {
@@ -1017,26 +1128,67 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
         };
 
         let engine = Arc::clone(engine);
-        // Safe truncation for logging (respect UTF-8 char boundaries)
         let preview: String = text.chars().take(80).collect();
         dbg_log!("[TTS] synthesizing: {:?}", preview);
-        show_status(&status_rc, "Speaking...");
+
+        // Yellow button while synthesizing
+        *state_tts_rc.borrow_mut() = State::Synthesizing;
+        btn_tts.add_css_class("synthesizing");
+
+        let stop_flag = Arc::clone(&rt.tts_stop);
+        stop_flag.store(false, std::sync::atomic::Ordering::Relaxed);
+        drop(rt);
+
         let sr = engine.sample_rate();
-        std::thread::spawn(move || match engine.synthesize(&text) {
-            Ok(samples) => {
-                dbg_log!(
-                    "[TTS] got {} samples, playing at {}Hz...",
-                    samples.len(),
-                    sr
-                );
-                play_tts_audio(samples, sr);
-            }
-            Err(e) => dbg_log!("[TTS] synthesis error: {e}"),
+        let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<i16>, String>>();
+
+        std::thread::spawn(move || {
+            let result = engine.synthesize(&text);
+            let _ = tx.send(result);
         });
-        // Hide status after a short delay (speech may still be playing)
-        let st2 = status_rc.clone();
-        glib::timeout_add_local_once(std::time::Duration::from_secs(2), move || {
-            hide_status(&st2);
+
+        let btn2 = btn_tts.clone();
+        let state2 = Rc::clone(&state_tts_rc);
+        let stop2 = stop_flag;
+
+        glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+            match rx.try_recv() {
+                Ok(Ok(samples)) => {
+                    dbg_log!(
+                        "[TTS] got {} samples, playing at {}Hz...",
+                        samples.len(),
+                        sr
+                    );
+                    btn2.remove_css_class("synthesizing");
+
+                    // Green button while speaking
+                    *state2.borrow_mut() = State::Speaking;
+                    btn2.add_css_class("speaking");
+
+                    let btn3 = btn2.clone();
+                    let state3 = Rc::clone(&state2);
+                    let stop3 = Arc::clone(&stop2);
+
+                    play_tts_audio(samples, sr, stop3, move || {
+                        btn3.remove_css_class("speaking");
+                        *state3.borrow_mut() = State::Idle;
+                    });
+
+                    glib::ControlFlow::Break
+                }
+                Ok(Err(e)) => {
+                    dbg_log!("[TTS] synthesis error: {e}");
+                    btn2.remove_css_class("synthesizing");
+                    *state2.borrow_mut() = State::Idle;
+                    glib::ControlFlow::Break
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                Err(_) => {
+                    btn2.remove_css_class("synthesizing");
+                    *state2.borrow_mut() = State::Idle;
+                    glib::ControlFlow::Break
+                }
+            }
         });
     });
     app.add_action(&read_clipboard_action);
@@ -1044,6 +1196,8 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
     // --- D-Bus action: "speak" — reads clipboard and speaks ---
     let speak_action = gtk4::gio::SimpleAction::new("speak", None);
     let runtime_speak = Rc::clone(&runtime);
+    let state_speak = Rc::clone(&state);
+    let btn_speak = button.clone();
     speak_action.connect_activate(move |_, _| {
         eprintln!("[dbus] 'speak' action activated");
         let rt = runtime_speak.borrow();
@@ -1058,10 +1212,47 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
             _ => return,
         };
         let engine = Arc::clone(engine);
+        let stop_flag = Arc::clone(&rt.tts_stop);
+        stop_flag.store(false, std::sync::atomic::Ordering::Relaxed);
+        drop(rt);
+
         let sr = engine.sample_rate();
+        *state_speak.borrow_mut() = State::Synthesizing;
+        btn_speak.add_css_class("synthesizing");
+
+        let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<i16>, String>>();
         std::thread::spawn(move || {
-            if let Ok(samples) = engine.synthesize(&text) {
-                play_tts_audio(samples, sr);
+            let _ = tx.send(engine.synthesize(&text));
+        });
+
+        let btn2 = btn_speak.clone();
+        let state2 = Rc::clone(&state_speak);
+        let stop2 = stop_flag;
+        glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+            match rx.try_recv() {
+                Ok(Ok(samples)) => {
+                    btn2.remove_css_class("synthesizing");
+                    *state2.borrow_mut() = State::Speaking;
+                    btn2.add_css_class("speaking");
+                    let btn3 = btn2.clone();
+                    let state3 = Rc::clone(&state2);
+                    play_tts_audio(samples, sr, Arc::clone(&stop2), move || {
+                        btn3.remove_css_class("speaking");
+                        *state3.borrow_mut() = State::Idle;
+                    });
+                    glib::ControlFlow::Break
+                }
+                Ok(Err(_)) => {
+                    btn2.remove_css_class("synthesizing");
+                    *state2.borrow_mut() = State::Idle;
+                    glib::ControlFlow::Break
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                Err(_) => {
+                    btn2.remove_css_class("synthesizing");
+                    *state2.borrow_mut() = State::Idle;
+                    glib::ControlFlow::Break
+                }
             }
         });
     });
@@ -1798,8 +1989,14 @@ fn show_history_dialog(_window: &gtk4::ApplicationWindow, db: &Arc<Mutex<Db>>) {
 
 // ── TTS helpers ─────────────────────────────────────────────────────────────
 
-/// Play TTS audio (i16 samples) via rodio on a background thread.
-fn play_tts_audio(samples: Vec<i16>, sample_rate: u32) {
+/// Play TTS audio with stop support. Calls `on_done` on the UI thread when finished.
+fn play_tts_audio<F: FnOnce() + 'static>(
+    samples: Vec<i16>,
+    sample_rate: u32,
+    stop_flag: Arc<std::sync::atomic::AtomicBool>,
+    on_done: F,
+) {
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
     std::thread::spawn(move || {
         use rodio::{OutputStream, Sink, buffer::SamplesBuffer};
         if let Ok((_stream, handle)) = OutputStream::try_default()
@@ -1807,12 +2004,35 @@ fn play_tts_audio(samples: Vec<i16>, sample_rate: u32) {
         {
             let source = SamplesBuffer::new(1, sample_rate, samples);
             sink.append(source);
-            sink.sleep_until_end();
+            // Poll stop flag while playing
+            while !sink.empty() {
+                if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    sink.stop();
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+        let _ = tx.send(());
+    });
+
+    let mut on_done = Some(on_done);
+    glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+        match rx.try_recv() {
+            Ok(()) => {
+                if let Some(cb) = on_done.take() {
+                    cb();
+                }
+                glib::ControlFlow::Break
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(_) => glib::ControlFlow::Break,
         }
     });
 }
 
-/// Download Piper TTS via Python venv, with a dialog + progress bar.
+/// Download Piper TTS (venv + voice model) with a dialog + progress bar.
+/// If `skip_venv` is true, only downloads the voice model files.
 fn download_tts_models(
     runtime: &Rc<RefCell<RuntimeState>>,
     models_dir: &std::path::Path,
@@ -1821,9 +2041,15 @@ fn download_tts_models(
     read_cb_action: &gtk4::gio::SimpleAction,
     status: &gtk4::Label,
     parent: &gtk4::ApplicationWindow,
+    voice: &'static config::PiperVoice,
+    skip_venv: bool,
 ) {
     runtime.borrow_mut().tts_downloading = true;
-    dbg_log!("[TTS] download_tts_models called");
+    dbg_log!(
+        "[TTS] download_tts_models voice={} skip_venv={}",
+        voice.id,
+        skip_venv
+    );
 
     let piper_dir = models_dir.join("piper");
     std::fs::create_dir_all(&piper_dir).ok();
@@ -1845,7 +2071,12 @@ fn download_tts_models(
     vbox.set_margin_start(20);
     vbox.set_margin_end(20);
 
-    let progress_label = gtk4::Label::new(Some("Downloading Piper TTS engine..."));
+    let initial_label = if skip_venv {
+        format!("Downloading voice: {}...", voice.label)
+    } else {
+        "Setting up Piper TTS engine...".to_string()
+    };
+    let progress_label = gtk4::Label::new(Some(&initial_label));
     let progress_bar = gtk4::ProgressBar::new();
     progress_bar.set_show_text(true);
     progress_bar.set_text(Some("Starting..."));
@@ -1857,46 +2088,50 @@ fn download_tts_models(
 
     let (tx, rx) = std::sync::mpsc::channel::<DownloadMsg>();
     let sdir = piper_dir.clone();
+    let voice_id = voice.id.to_string();
+    let onnx_url = voice.onnx_url();
+    let config_url = voice.config_url();
 
     std::thread::spawn(move || {
-        let run_cmd = |cmd: &str, args: &[&str]| -> Result<(), String> {
-            dbg_log!("[TTS] running: {cmd} {}", args.join(" "));
-            let output = std::process::Command::new(cmd)
-                .args(args)
-                .output()
-                .map_err(|e| format!("run {cmd}: {e}"))?;
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(format!("{cmd} failed: {stderr}"));
+        // Step 1: Set up venv (if needed)
+        if !skip_venv {
+            let run_cmd = |cmd: &str, args: &[&str]| -> Result<(), String> {
+                dbg_log!("[TTS] running: {cmd} {}", args.join(" "));
+                let output = std::process::Command::new(cmd)
+                    .args(args)
+                    .output()
+                    .map_err(|e| format!("run {cmd}: {e}"))?;
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    return Err(format!("{cmd} failed: {stderr}"));
+                }
+                Ok(())
+            };
+
+            let _ = tx.send(DownloadMsg::StepLabel(
+                "Creating Python environment...".into(),
+            ));
+            let venv_dir = sdir.join("venv");
+            if let Err(e) = run_cmd("python3", &["-m", "venv", &venv_dir.to_string_lossy()]) {
+                let _ = tx.send(DownloadMsg::Error(format!("python3 venv: {e}")));
+                return;
             }
-            Ok(())
-        };
 
-        // Step 1: Create Python venv
-        let _ = tx.send(DownloadMsg::StepLabel(
-            "Creating Python environment...".into(),
-        ));
-        let venv_dir = sdir.join("venv");
-        if let Err(e) = run_cmd("python3", &["-m", "venv", &venv_dir.to_string_lossy()]) {
-            let _ = tx.send(DownloadMsg::Error(format!("python3 venv: {e}")));
-            return;
+            let _ = tx.send(DownloadMsg::StepLabel(
+                "Installing piper-tts (may take a moment)...".into(),
+            ));
+            let pip = venv_dir.join("bin/pip");
+            if let Err(e) = run_cmd(
+                &pip.to_string_lossy(),
+                &["install", "piper-tts", "pathvalidate"],
+            ) {
+                let _ = tx.send(DownloadMsg::Error(format!("pip install: {e}")));
+                return;
+            }
+            dbg_log!("[TTS] piper-tts installed");
         }
 
-        // Step 2: Install piper-tts + pathvalidate
-        let _ = tx.send(DownloadMsg::StepLabel(
-            "Installing piper-tts (may take a moment)...".into(),
-        ));
-        let pip = venv_dir.join("bin/pip");
-        if let Err(e) = run_cmd(
-            &pip.to_string_lossy(),
-            &["install", "piper-tts", "pathvalidate"],
-        ) {
-            let _ = tx.send(DownloadMsg::Error(format!("pip install: {e}")));
-            return;
-        }
-        dbg_log!("[TTS] piper-tts installed");
-
-        // Step 3: Download voice model files
+        // Step 2: Download voice model files
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(600))
             .build()
@@ -1932,18 +2167,18 @@ fn download_tts_models(
             Ok(())
         };
 
-        let files = config::PIPER_VOICE_FILES;
-        for (idx, &(rel_path, url)) in files.iter().enumerate() {
-            let _ = tx.send(DownloadMsg::StepLabel(format!(
-                "Downloading voice ({}/{})...",
-                idx + 1,
-                files.len()
-            )));
-            let dest = sdir.join(rel_path);
-            if let Err(e) = download_file(url, &dest) {
-                let _ = tx.send(DownloadMsg::Error(format!("{rel_path}: {e}")));
-                return;
-            }
+        let _ = tx.send(DownloadMsg::StepLabel("Downloading voice model...".into()));
+        let onnx_dest = sdir.join(format!("{voice_id}.onnx"));
+        if let Err(e) = download_file(&onnx_url, &onnx_dest) {
+            let _ = tx.send(DownloadMsg::Error(format!("voice model: {e}")));
+            return;
+        }
+
+        let _ = tx.send(DownloadMsg::StepLabel("Downloading voice config...".into()));
+        let config_dest = sdir.join(format!("{voice_id}.onnx.json"));
+        if let Err(e) = download_file(&config_url, &config_dest) {
+            let _ = tx.send(DownloadMsg::Error(format!("voice config: {e}")));
+            return;
         }
 
         let _ = tx.send(DownloadMsg::Done);
@@ -1958,9 +2193,9 @@ fn download_tts_models(
     let dialog_ref = dialog.clone();
     let pbar = progress_bar.clone();
     let plabel = progress_label.clone();
+    let vid = voice.id.to_string();
 
     glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
-        // Process all pending messages, keep the latest of each type
         let mut last_progress = None;
         let mut last_label = None;
         let mut terminal = None;
@@ -2006,17 +2241,19 @@ fn download_tts_models(
             Some(Ok(())) => {
                 dialog_ref.close();
                 show_status(&st, "Loading TTS...");
-                match PiperTts::new(&sdir) {
+                match PiperTts::new(&sdir, &vid) {
                     Ok(engine) => {
                         let mut rt = runtime_c.borrow_mut();
                         rt.tts_provider = TtsProvider::Piper;
+                        rt.tts_voice = vid.clone();
                         rt.tts_engine = Some(Arc::new(engine));
                         rt.tts_downloading = false;
                         if let Ok(d) = db_c.lock() {
                             let _ = d.set_setting("tts_provider", "piper");
+                            let _ = d.set_setting("tts_voice", &vid);
                         }
                         read_cb_c.set_enabled(true);
-                        action_c.set_state(&"piper".to_variant());
+                        action_c.set_state(&vid.to_variant());
                         hide_status(&st);
                     }
                     Err(e) => {

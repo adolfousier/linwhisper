@@ -12,15 +12,18 @@ pub struct PiperTts {
 }
 
 impl PiperTts {
-    /// Load Piper from `piper_dir/` which should contain:
-    /// - `venv/` (Python venv with piper-tts installed)
-    /// - `voice.onnx` + `voice.onnx.json`
-    pub fn new(piper_dir: &Path) -> Result<Self, String> {
-        dbg_log!("[TTS] PiperTts::new from {}", piper_dir.display());
+    /// Load Piper from `piper_dir/` with a specific voice model.
+    /// Expects `venv/bin/piper` and `{voice_id}.onnx` + `{voice_id}.onnx.json`.
+    pub fn new(piper_dir: &Path, voice_id: &str) -> Result<Self, String> {
+        dbg_log!(
+            "[TTS] PiperTts::new from {} voice={}",
+            piper_dir.display(),
+            voice_id
+        );
 
         let piper_bin = piper_dir.join("venv/bin/piper");
-        let model_path = piper_dir.join("voice.onnx");
-        let config_path = piper_dir.join("voice.onnx.json");
+        let model_path = piper_dir.join(format!("{voice_id}.onnx"));
+        let config_path = piper_dir.join(format!("{voice_id}.onnx.json"));
 
         if !piper_bin.exists() {
             return Err(format!("missing piper binary: {}", piper_bin.display()));
@@ -53,7 +56,11 @@ impl PiperTts {
 
     /// Synthesize speech from text. Returns i16 PCM samples.
     pub fn synthesize(&self, text: &str) -> Result<Vec<i16>, String> {
-        dbg_log!("[TTS] synthesize, text len={}", text.len());
+        let text = clean_for_speech(text);
+        if text.is_empty() {
+            return Err("nothing to speak after cleaning".into());
+        }
+        dbg_log!("[TTS] synthesize, cleaned len={}", text.len());
         let t0 = std::time::Instant::now();
 
         let output = std::process::Command::new(&self.piper_bin)
@@ -102,6 +109,48 @@ impl PiperTts {
 
         Ok(samples)
     }
+}
+
+/// Clean text for speech synthesis — strip terminal/markdown noise.
+fn clean_for_speech(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        let trimmed = line.trim();
+        // Skip empty lines, lines that are just symbols/decoration
+        if trimmed.is_empty()
+            || trimmed
+                .chars()
+                .all(|c| "─━═⏺•◆▸▹►▪■□●○-=_*#>|+".contains(c))
+        {
+            continue;
+        }
+        // Strip leading bullet/decoration chars
+        let cleaned = trimmed
+            .trim_start_matches(|c: char| "⏺•◆▸▹►▪■□●○-*>#".contains(c))
+            .trim();
+        if cleaned.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(cleaned);
+    }
+    // Collapse multiple spaces
+    let mut result = String::with_capacity(out.len());
+    let mut prev_space = false;
+    for c in out.chars() {
+        if c.is_whitespace() {
+            if !prev_space {
+                result.push(' ');
+                prev_space = true;
+            }
+        } else {
+            result.push(c);
+            prev_space = false;
+        }
+    }
+    result.trim().to_string()
 }
 
 /// Extract sample_rate from piper config JSON.
