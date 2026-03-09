@@ -1,17 +1,20 @@
 //! # WhisperCrabs
 //!
-//! Floating voice-to-text tool for Linux, macOS, and Windows.
+//! Local-first floating voice-to-text and text-to-speech tool for Linux, macOS, and Windows.
 //!
 //! Click to record, click to transcribe, text copied to clipboard.
-//! Supports fully local transcription via whisper.cpp or any
-//! OpenAI-compatible API endpoint (Groq, Ollama, OpenRouter, LM Studio, etc.).
+//! Copy any text and click to hear it read aloud.
+//!
+//! **Local-first** — runs entirely on your machine with whisper.cpp (STT)
+//! and Piper (TTS). No cloud required. Also supports any OpenAI-compatible
+//! API endpoint for STT (Groq, Ollama, OpenRouter, LM Studio, etc.).
 //!
 //! ## Features
 //!
 //! - Floating always-on-top mic button (GTK4)
-//! - One-click provider switching via right-click menu
-//! - Local transcription via whisper.cpp (no internet required)
-//! - API transcription via any OpenAI-compatible endpoint
+//! - STT — Local (whisper.cpp) or API (OpenAI-compatible)
+//! - TTS — Local via Piper, 6 built-in voices, optional
+//! - One-click STT/TTS switching via right-click menu
 //! - Global keyboard shortcuts via D-Bus
 //! - AI Agent-Ready: full D-Bus control
 

@@ -994,6 +994,11 @@ pub fn build_ui(app: &gtk4::Application, config: Arc<Config>) {
         let has_voice = config::piper_voice_exists(&piper_dir, voice.id);
 
         if has_venv && has_voice {
+            // Delete old voice files before loading new one
+            let old_voice = runtime_tts.borrow().tts_voice.clone();
+            if old_voice != voice.id {
+                cleanup_old_voice(&piper_dir, &old_voice);
+            }
             // Already downloaded — just load
             dbg_log!("[TTS] loading voice {}...", voice.id);
             show_status(&status_tts, "Loading TTS...");
@@ -2031,6 +2036,22 @@ fn play_tts_audio<F: FnOnce() + 'static>(
     });
 }
 
+/// Delete old voice model files (onnx + config) to free disk space.
+fn cleanup_old_voice(piper_dir: &std::path::Path, old_voice_id: &str) {
+    if old_voice_id.is_empty() || old_voice_id == "none" {
+        return;
+    }
+    let onnx = piper_dir.join(format!("{old_voice_id}.onnx"));
+    let json = piper_dir.join(format!("{old_voice_id}.onnx.json"));
+    if onnx.exists() {
+        dbg_log!("[TTS] deleting old voice model: {}", onnx.display());
+        let _ = std::fs::remove_file(&onnx);
+    }
+    if json.exists() {
+        let _ = std::fs::remove_file(&json);
+    }
+}
+
 /// Download Piper TTS (venv + voice model) with a dialog + progress bar.
 /// If `skip_venv` is true, only downloads the voice model files.
 #[allow(clippy::too_many_arguments)]
@@ -2186,6 +2207,7 @@ fn download_tts_models(
     });
 
     let runtime_c = Rc::clone(runtime);
+    let old_voice_id = runtime.borrow().tts_voice.clone();
     let db_c = Arc::clone(db);
     let action_c = action.clone();
     let read_cb_c = read_cb_action.clone();
@@ -2241,6 +2263,10 @@ fn download_tts_models(
         match terminal {
             Some(Ok(())) => {
                 dialog_ref.close();
+                // Clean up previous voice files
+                if old_voice_id != vid {
+                    cleanup_old_voice(&sdir, &old_voice_id);
+                }
                 show_status(&st, "Loading TTS...");
                 match PiperTts::new(&sdir, &vid) {
                     Ok(engine) => {

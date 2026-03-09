@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.23 — 2026-03-09
+
+- **Auto-cleanup old voice models** — switching TTS voices deletes the previous voice files (~63 MB) to free disk space
+- **README TTS usage steps** — clear 1-2-3 instructions for Read Clipboard workflow
+
 ## v0.1.22 — 2026-03-09
 
 - **Text-to-speech via Piper** — optional local TTS powered by [Piper](https://github.com/rhasspy/piper) (Python venv, auto-installed on first use)
